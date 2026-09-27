@@ -85,3 +85,18 @@ plugin. PHP is out of scope for this release.
    tracked renames should avoid the full-buffer Tree-sitter parse that dominates
    the current rename latency. Compare the resulting timings with the existing
    behavior without imposing a machine-dependent test threshold.
+
+## Repository discovery and presentation
+
+- The GitHub repository description and topics should identify the plugin as a
+  Neovim tag-closing and paired-renaming tool, using only implemented languages
+  and behavior. They must not advertise roadmap features as available.
+- The repository's social preview should be legible at link-preview size,
+  identify the plugin and its two core editing actions, and make no unsupported
+  compatibility or performance claims.
+- The English and Russian READMEs should open with a concise description of
+  the same current capabilities, use familiar search terms naturally, and keep
+  installation, prerequisites, limitations, and language coverage easy to find.
+- Acceptance requires checking both rendered README pages, verifying that
+  their claims match the implementation and each other, and confirming the
+  published repository metadata and default-branch contents after publication.

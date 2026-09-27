@@ -1,9 +1,11 @@
-# paired-tags.nvim
+# paired-tags.nvim: auto-close and rename tags in Neovim
 
-Tree-sitter-aware closing and renaming of paired markup tags, plus a focused
-HTML Enter mapping for Neovim. [Русская документация](README.ru.md).
+Automatically close markup tags and keep matching tag names in sync while
+editing in Neovim. The plugin uses Tree-sitter for HTML, Django HTML templates,
+XML, JSX/TSX, Vue, Svelte, and HTML embedded in Markdown. It also provides an
+Enter mapping between adjacent HTML tags. [Русская документация](README.ru.md).
 
-## What it does
+## Features
 
 | Action | Result |
 | --- | --- |
@@ -16,7 +18,7 @@ The plugin supports `html`, `htmldjango`, `xml`, `javascriptreact`,
 current buffer's Tree-sitter parser to identify tags; it does not install
 parsers. The Enter feature works in `html` and `htmldjango` only.
 
-### Closing tags
+### Automatic tag closing
 
 - Creates a closer after a completed opening tag, including nested tags,
   custom HTML elements, JSX/TSX components, member and namespaced component
@@ -31,7 +33,7 @@ parsers. The Enter feature works in `html` and `htmldjango` only.
   other non-markup text. It leaves an ambiguous parser state unchanged instead
   of consuming a parent's or sibling's existing closer.
 
-### Paired renaming
+### Rename matching tags
 
 - Keeps the matching opener and closer in sync when either name is edited,
   including normal-mode edits, Insert edits, and paste.

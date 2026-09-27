@@ -1,7 +1,9 @@
-# paired-tags.nvim
+# paired-tags.nvim: автозакрытие и переименование тегов в Neovim
 
-Закрытие и переименование парных тегов с помощью Tree-sitter и обработка Enter
-между HTML-тегами для Neovim. [English README](README.md).
+Плагин автоматически закрывает теги разметки и синхронизирует имена парных
+тегов при редактировании в Neovim. Он использует Tree-sitter для HTML,
+Django HTML-шаблонов, XML, JSX/TSX, Vue, Svelte и HTML внутри Markdown.
+Также обрабатывает Enter между соседними HTML-тегами. [English README](README.md).
 
 ## Возможности
 
