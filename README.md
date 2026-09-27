@@ -3,7 +3,7 @@
 Automatically close markup tags and keep matching tag names in sync while
 editing in Neovim. The plugin uses Tree-sitter for HTML, Django HTML templates,
 XML, JSX/TSX, Vue, Svelte, and HTML embedded in Markdown. It also provides an
-Enter mapping between adjacent HTML tags. [Русская документация](README.ru.md).
+Enter mapping between adjacent HTML tags.
 
 ![paired-tags.nvim preview with a matching JSX tag pair](assets/social-preview.png)
 
@@ -97,7 +97,7 @@ Calling it again in the same session is harmless. If another plugin also maps
 
 PHP templates are not supported in this release. Visual highlighting of the
 current matching tag pair is also not implemented. Both are explicit roadmap
-items in [ROADMAP.md](ROADMAP.md) ([по-русски](ROADMAP.ru.md)).
+items in [ROADMAP.md](ROADMAP.md).
 
 The plugin intentionally skips edits when the parser is absent or a pair
 cannot be identified safely. It does not auto-install parsers, format a whole

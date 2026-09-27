@@ -62,10 +62,10 @@ plugin. PHP is out of scope for this release.
 - Target the currently verified Neovim 0.12.5 environment and avoid adding
   other dependencies. Preserve the current Lazy and Tree-sitter versions in the
   configuration unless their APIs require a separately approved change.
-- Keep source comments, identifiers, and API documentation in English. Use
-  English `README.md` as the default documentation with a link to a separate
-  `README.ru.md`. Explain every shipped feature, prerequisites, installation,
-  settings, limitations, and testing commands. Use an MIT license.
+- Keep repository documentation, comments, identifiers, and API documentation
+  in English. `README.md` must explain every shipped feature, prerequisites,
+  installation, settings, limitations, and testing commands. Use an MIT license.
+- Keep non-ASCII XML tag-name coverage with Greek test data.
 - Maintain a roadmap that explicitly includes PHP support and **paired-tag
   highlighting**. Do not describe roadmap features as implemented.
 
@@ -77,9 +77,9 @@ plugin. PHP is out of scope for this release.
    editing tests pass against the standalone plugin.
 3. The source Neovim configuration loads the published GitHub plugin through
    Lazy and its affected tests pass after the migration.
-4. English and Russian READMEs accurately describe the tested release and
-   cross-link. Roadmap and the source configuration's Russian knowledge base
-   reflect the resulting architecture and known limitations.
+4. The English README and roadmap accurately describe the tested release and
+   known limitations. The source configuration's knowledge base reflects the
+   resulting architecture.
 5. Focused tests cover the optimized rename path and its invalidation after
    unrelated edits. On a representative 5,000-line HTML buffer, repeated
    tracked renames should avoid the full-buffer Tree-sitter parse that dominates
@@ -94,9 +94,9 @@ plugin. PHP is out of scope for this release.
 - The repository's social preview should be legible at link-preview size,
   identify the plugin and its two core editing actions, and make no unsupported
   compatibility or performance claims.
-- The English and Russian READMEs should open with a concise description of
-  the same current capabilities, use familiar search terms naturally, and keep
-  installation, prerequisites, limitations, and language coverage easy to find.
-- Acceptance requires checking both rendered README pages, verifying that
-  their claims match the implementation and each other, and confirming the
-  published repository metadata and default-branch contents after publication.
+- The English README should open with a concise description of current
+  capabilities, use familiar search terms naturally, and keep installation,
+  prerequisites, limitations, and language coverage easy to find.
+- Acceptance requires checking the rendered README, verifying that its claims
+  match the implementation, and confirming the published repository metadata
+  and default-branch contents after publication.
