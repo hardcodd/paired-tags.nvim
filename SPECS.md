@@ -35,6 +35,15 @@ plugin. PHP is out of scope for this release.
 - Feature handling is inactive in special buffers and in filetypes outside the
   supported set. Missing or broken parsers must not cause unrelated buffer
   changes or errors.
+- Paired-name edits may use a saved match without reparsing the buffer when
+  every intervening user edit is confined to that name. Any change outside
+  the saved name, a buffer reload, or uncertain tracking must use the existing
+  parser-checked behavior. This optimization must preserve synchronized edits
+  from either tag, safety in comments and embedded languages, and behavior
+  when a parser is unavailable.
+- Text edits that cannot affect a tag or its saved match may bypass parsing;
+  uncertain input, including multiline opening tags, must retain the existing
+  parser-checked behavior.
 - `setup()` registers the required callbacks and default Insert mappings for
   `>` and `<CR>`. Repeating `setup()` must not stack paste wrappers, duplicate
   autocommands, or change the plugin's observable behavior. It must not depend
@@ -71,3 +80,8 @@ plugin. PHP is out of scope for this release.
 4. English and Russian READMEs accurately describe the tested release and
    cross-link. Roadmap and the source configuration's Russian knowledge base
    reflect the resulting architecture and known limitations.
+5. Focused tests cover the optimized rename path and its invalidation after
+   unrelated edits. On a representative 5,000-line HTML buffer, repeated
+   tracked renames should avoid the full-buffer Tree-sitter parse that dominates
+   the current rename latency. Compare the resulting timings with the existing
+   behavior without imposing a machine-dependent test threshold.

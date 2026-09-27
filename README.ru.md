@@ -114,8 +114,9 @@ nvim --headless -u NONE -i NONE -n \
 ```
 
 Аналогично запускаются `html_enter_spec.lua`, `paired_editing_spec.lua`,
-`tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
-`tag_bug_report_2_spec.lua` и `tag_bug_report_3_spec.lua`. Синхронным тестам
+`rename_fast_path_spec.lua`, `tag_scenarios_spec.lua`,
+`tag_bug_regressions_spec.lua`, `tag_bug_report_2_spec.lua` и
+`tag_bug_report_3_spec.lua`. Синхронным тестам
 нужна показанная обёртка `pcall`/`cquit`; регрессионные раннеры завершаются
 сами. Контракт и критерии приёмки: [SPECS.md](SPECS.md).
 

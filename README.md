@@ -120,8 +120,9 @@ nvim --headless -u NONE -i NONE -n \
 ```
 
 Replace the test path with `html_enter_spec.lua`,
-`paired_editing_spec.lua`, `tag_scenarios_spec.lua`,
-`tag_bug_regressions_spec.lua`, `tag_bug_report_2_spec.lua`, or
+`paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
+`tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
+`tag_bug_report_2_spec.lua`, or
 `tag_bug_report_3_spec.lua` to run the other suites. Synchronous tests need
 the `pcall`/`cquit` wrapper shown above; regression runners exit on their own.
 The contract and acceptance criteria are in [SPECS.md](SPECS.md).

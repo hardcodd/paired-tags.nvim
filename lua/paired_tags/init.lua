@@ -81,7 +81,12 @@ local pending = {} ---@type table<integer, PendingTag[]>
 ---@field mate integer
 ---@field source_closing boolean
 ---@field mate_closing boolean
+---@field source_row integer
+---@field source_first integer
+---@field source_last integer
+---@field fast_valid boolean
 local tracked = {} ---@type table<integer, TrackedPair>
+local attached = {} ---@type table<integer, boolean>
 
 ---@class TagName
 ---@field row integer
@@ -818,6 +823,68 @@ local function release_tracked(buf)
   tracked[buf] = nil
 end
 
+--- Track the exact edit range so a saved pair is used without reparsing only
+--- while the source name remains the sole user-edited text.
+---@param _event string
+---@param changed_buf integer
+---@param _changedtick integer
+---@param row integer
+---@param col integer
+---@param _byte_offset integer
+---@param old_rows integer
+---@param old_cols integer
+---@param _old_bytes integer
+---@param new_rows integer
+---@param new_cols integer
+---@param _new_bytes integer
+---@return nil
+local function tracked_bytes(_event, changed_buf, _changedtick, row, col,
+    _byte_offset, old_rows, old_cols, _old_bytes, new_rows, new_cols,
+    _new_bytes)
+  local pair = tracked[changed_buf]
+  if not pair or not pair.fast_valid then return end
+  if old_rows ~= 0 or new_rows ~= 0 then
+    pair.fast_valid = false
+    return
+  end
+  if changing[changed_buf] then
+    local mate = vim.api.nvim_buf_get_extmark_by_id(changed_buf,
+      tracked_namespace, pair.mate, {})
+    if mate[1] ~= row or mate[2] ~= col then
+      pair.fast_valid = false
+      return
+    end
+    if row == pair.source_row and col < pair.source_first then
+      local delta = new_cols - old_cols
+      pair.source_first = pair.source_first + delta
+      pair.source_last = pair.source_last + delta
+    end
+  elseif row == pair.source_row and col >= pair.source_first
+      and col + old_cols <= pair.source_last then
+    pair.source_last = pair.source_last + new_cols - old_cols
+  else
+    pair.fast_valid = false
+  end
+end
+
+---@param buf integer
+---@return boolean
+local function observe_tracked_edits(buf)
+  if attached[buf] then return true end
+  local ok = vim.api.nvim_buf_attach(buf, false, {
+    on_bytes = tracked_bytes,
+    on_reload = function()
+      release_tracked(buf)
+    end,
+    on_detach = function()
+      attached[buf] = nil
+      release_tracked(buf)
+    end,
+  })
+  if ok then attached[buf] = true end
+  return ok
+end
+
 ---@param buf integer
 ---@param mark integer
 ---@param is_closing boolean
@@ -923,6 +990,10 @@ function M.capture_pair(event)
       mate_name.row, mate_name.first, { right_gravity = false }),
     source_closing = is_closing,
     mate_closing = not is_closing,
+    source_row = source.row,
+    source_first = source.first,
+    source_last = source.last,
+    fast_valid = observe_tracked_edits(buf),
   }
 end
 
@@ -1151,12 +1222,25 @@ function M.edit(buf, row, col, autoclose)
     or not supported[vim.bo[buf].filetype] or streaming_paste[buf] then return end
   local available, parser = pcall(vim.treesitter.get_parser, buf)
   if not available or not parser then return end
+  local pair = tracked[buf]
+  if pair and pair.fast_valid and rename_tracked(buf, row, col) then return end
+  if not pair then
+    local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+    if line and line:sub(col, col) ~= ">" then
+      local before = line:sub(1, col)
+      local left = before:match(".*()<")
+      local right = before:match(".*()>")
+      if not left or (right and right > left) then return end
+    end
+  end
   local ok = pcall(function() parser:parse({ row, 0, row, col + 1 }) end)
   if not ok then return end
   if inside_markdown_code(buf, row, math.max(0, col - 1)) then return end
   if inside_vue_interpolation_string(buf, row, math.max(0, col - 1)) then return end
   if inside_xml_processing_instruction(buf, row, math.max(0, col - 1)) then return end
   if inside_style_text(buf, row, math.max(0, col - 1)) then return end
+  if pair and not pair.fast_valid
+    and inside_literal(buf, row, math.max(0, col - 1)) then return end
   if rename_tracked(buf, row, col) then return end
   local tag = tag_at(buf, row, math.max(0, col - 1))
   if tag and inside_html_text_ancestor(buf, tag) then return end
