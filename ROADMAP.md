@@ -14,5 +14,7 @@ current release.
    regression fixtures before advertising support.
 4. **Configuration and compatibility.** Explore opt-in mappings or per-filetype
    controls without changing the safe default behavior or stacking handlers.
-5. **Performance and compatibility tests.** Benchmark large documents and
-   verify supported Neovim and parser versions in automated CI.
+5. **Automated performance and compatibility checks.** Add repeatable
+   large-document benchmarks to CI and verify supported Neovim and parser
+   versions there. Editing performance has already been measured and improved
+   on 5,000-line HTML and TSX fixtures locally.
