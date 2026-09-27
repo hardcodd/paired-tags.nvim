@@ -5,6 +5,8 @@ editing in Neovim. The plugin uses Tree-sitter for HTML, Django HTML templates,
 XML, JSX/TSX, Vue, Svelte, and HTML embedded in Markdown. It also provides an
 Enter mapping between adjacent HTML tags. [Русская документация](README.ru.md).
 
+![paired-tags.nvim preview with a matching JSX tag pair](assets/social-preview.png)
+
 ## Features
 
 | Action | Result |
