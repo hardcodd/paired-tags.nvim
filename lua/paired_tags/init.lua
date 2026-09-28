@@ -67,6 +67,18 @@ local streaming_paste = {} ---@type table<integer, boolean>
 local pending_namespace = vim.api.nvim_create_namespace("PairedTagInput")
 local tracked_namespace = vim.api.nvim_create_namespace("PairedTagRename")
 local key_namespace = vim.api.nvim_create_namespace("PairedTagBeforeEdit")
+local highlight_namespace = vim.api.nvim_create_namespace("PairedTagHighlight")
+local highlight_groups = { opening = "PairedTagsOpening",
+  closing = "PairedTagsClosing" }
+local highlighted_buf ---@type integer?
+local highlighted_pair ---@type integer[]?
+local highlighted_tick ---@type integer?
+local function default_highlights()
+  vim.api.nvim_set_hl(0, "PairedTagsOpening", { default = true,
+    link = "MatchParen" })
+  vim.api.nvim_set_hl(0, "PairedTagsClosing", { default = true,
+    link = "MatchParen" })
+end
 local normal_edit_keys = {
   c = true, r = true, s = true, x = true, d = true, p = true, P = true,
 }
@@ -771,6 +783,79 @@ local function inside_html_text_ancestor(buf, tag)
   return false
 end
 
+--- Remove the active pair's two marks when its context is no longer valid.
+---@param event vim.api.keyset.create_autocmd.callback_args
+---@return nil
+function M.clear_highlight(event)
+  if highlighted_buf and (not event or event.buf == highlighted_buf) then
+    if vim.api.nvim_buf_is_valid(highlighted_buf) then
+      vim.api.nvim_buf_clear_namespace(highlighted_buf, highlight_namespace, 0, -1)
+    end
+    highlighted_buf = nil
+    highlighted_pair = nil
+    highlighted_tick = nil
+  end
+end
+
+--- Highlight only the two names of a parser-confirmed element at the cursor.
+--- Local parsing and direct child inspection avoid scanning a large buffer.
+---@param event vim.api.keyset.create_autocmd.callback_args
+---@return nil
+function M.refresh_highlight(event)
+  local buf = event.buf
+  if vim.api.nvim_get_current_buf() ~= buf then return end
+  if vim.bo[buf].buftype ~= "" or not supported[vim.bo[buf].filetype] then
+    M.clear_highlight({ buf = highlighted_buf })
+    return
+  end
+  if highlighted_buf and highlighted_buf ~= buf then
+    M.clear_highlight({ buf = highlighted_buf })
+  end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  row = row - 1
+  local available, parser = pcall(vim.treesitter.get_parser, buf)
+  if not available or not parser
+    or not pcall(function() parser:parse({ row, 0, row, col + 1 }) end) then
+    M.clear_highlight({ buf = buf })
+    return
+  end
+  local tag = tag_at(buf, row, col)
+  if not tag or inside_html_text_ancestor(buf, tag)
+    or inside_markdown_code(buf, row, col) then
+    M.clear_highlight({ buf = buf })
+    return
+  end
+  local opener, closer = element_tags(tag)
+  if not opener or not closer or not completed_tag(opener)
+    or not completed_tag(closer) then
+    M.clear_highlight({ buf = buf })
+    return
+  end
+  local first = tag_name(buf, opener, false)
+  local last = tag_name(buf, closer, true)
+  if not first or not last or not same_name(buf, first.text, last.text) then
+    M.clear_highlight({ buf = buf })
+    return
+  end
+  local positions = { first.row, first.first, first.last,
+    last.row, last.first, last.last }
+  local tick = vim.api.nvim_buf_get_changedtick(buf)
+  if highlighted_buf == buf and highlighted_tick == tick
+    and highlighted_pair and vim.deep_equal(highlighted_pair, positions) then
+    return
+  end
+  M.clear_highlight({ buf = buf })
+  vim.api.nvim_buf_set_extmark(buf, highlight_namespace,
+    first.row, first.first, { end_row = first.row, end_col = first.last,
+      hl_group = highlight_groups.opening, priority = 150 })
+  vim.api.nvim_buf_set_extmark(buf, highlight_namespace,
+    last.row, last.first, { end_row = last.row, end_col = last.last,
+      hl_group = highlight_groups.closing, priority = 150 })
+  highlighted_buf = buf
+  highlighted_pair = positions
+  highlighted_tick = tick
+end
+
 ---@param buf integer
 ---@param row integer
 ---@param col integer
@@ -1327,11 +1412,40 @@ end
 
 --- Register mappings and handlers once for current and future buffers.
 --- The paste wrapper keeps streamed fragments from triggering partial edits.
+---@param options? { highlight?: { opening?: string, closing?: string } }
 ---@return nil
-function M.setup()
+function M.setup(options)
+  if options ~= nil and type(options) ~= "table" then
+    error("paired_tags.setup: options must be a table")
+  end
+  options = options or {}
+  for key in pairs(options) do
+    if key ~= "highlight" then
+      error("paired_tags.setup: unknown option " .. tostring(key))
+    end
+  end
+  if options.highlight ~= nil then
+    if type(options.highlight) ~= "table" then
+      error("paired_tags.setup: highlight must be a table")
+    end
+    for key, value in pairs(options.highlight) do
+      if (key ~= "opening" and key ~= "closing")
+        or type(value) ~= "string" or value == "" then
+        error("paired_tags.setup: invalid highlight group " .. tostring(key))
+      end
+    end
+  end
   if configured then return end
+  if options.highlight then
+    highlight_groups.opening = options.highlight.opening or highlight_groups.opening
+    highlight_groups.closing = options.highlight.closing or highlight_groups.closing
+  end
   configured = true
+  default_highlights()
   local group = vim.api.nvim_create_augroup("PairedTags", { clear = true })
+  vim.api.nvim_create_autocmd("ColorScheme", { group = group,
+    callback = default_highlights,
+    desc = "Restore default paired-tag highlight links" })
   vim.on_key(M.before_key, key_namespace)
   local original_paste = vim.paste
   ---@param lines string[]
@@ -1361,6 +1475,15 @@ function M.setup()
     callback = M.clear_pending, desc = "Clear pending markup tag positions" })
   vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, { group = group,
     callback = M.changed, desc = "Close and rename paired markup tags" })
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "TextChanged",
+    "TextChangedI", "TextChangedP", "BufEnter", "WinEnter", "InsertEnter" }, {
+    group = group, callback = M.refresh_highlight,
+    desc = "Highlight the paired tags under the cursor",
+  })
+  vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout", "WinLeave" }, {
+    group = group, callback = M.clear_highlight,
+    desc = "Clear inactive paired-tag highlights",
+  })
   vim.keymap.set("i", ">", M.gt,
     { expr = true, silent = true, desc = "Close a completed markup tag" })
   vim.keymap.set("i", "<CR>", M.html_enter,

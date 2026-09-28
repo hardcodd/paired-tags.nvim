@@ -3,9 +3,10 @@
 ## Purpose and scope
 
 `paired-tags.nvim` provides automatic markup closing, synchronized paired-tag
-renaming, and an HTML Enter action. It extracts the behavior currently used by
-Alex's Neovim configuration without depending on that configuration's Lua
-modules. The public plugin must be usable through `require("paired_tags").setup()`
+renaming, matching-tag highlighting, and an HTML Enter action. It extracts
+the behavior currently used by Alex's Neovim configuration without depending
+on that configuration's Lua modules. The public plugin must be usable through
+`require("paired_tags").setup()`
 and through a `lazy.nvim` plugin specification.
 
 The first release supports `html`, `htmldjango`, `xml`, `javascriptreact`,
@@ -44,6 +45,26 @@ plugin. PHP is out of scope for this release.
 - Text edits that cannot affect a tag or its saved match may bypass parsing;
   uncertain input, including multiline opening tags, must retain the existing
   parser-checked behavior.
+- When the cursor is on either tag of a complete, explicitly paired element,
+  highlight both tag names. Match names using the language's case rules and
+  require a real Tree-sitter element pair, including injected HTML. Nested
+  elements highlight their own pair. Do not highlight unpaired, malformed,
+  mismatched, self-closing, void, or merely inferred closing tags, nor apparent
+  markup in comments, strings, raw text, or Markdown code. Clear stale marks
+  when the cursor moves away, text changes, the buffer is left or wiped, or a
+  parser becomes unavailable. Highlighting never changes buffer text.
+- `setup({ highlight = { opening = "...", closing = "..." } })` accepts
+  nonempty highlight-group names for each side; omitted names default to
+  `PairedTagsOpening` and `PairedTagsClosing`, linked by default to
+  `MatchParen`, including after a colorscheme change. Invalid option shapes or
+  names raise an error before setup.
+  Repeated `setup()` preserves the initial configuration and does not stack
+  callbacks or marks.
+- Highlight refreshes inspect the cursor's local parser range and direct
+  element children, without a whole-buffer lexical scan. Keep at most two
+  highlight extmarks per active buffer and avoid redundant mark updates when
+  the pair and buffer revision have not changed. Large-buffer checks must
+  verify bounded work without a machine-dependent timing threshold.
 - `setup()` registers the required callbacks and default Insert mappings for
   `>` and `<CR>`. Repeating `setup()` must not stack paste wrappers, duplicate
   autocommands, or change the plugin's observable behavior. It must not depend
@@ -66,8 +87,8 @@ plugin. PHP is out of scope for this release.
   in English. `README.md` must explain every shipped feature, prerequisites,
   installation, settings, limitations, and testing commands. Use an MIT license.
 - Keep non-ASCII XML tag-name coverage with Greek test data.
-- Maintain a roadmap that explicitly includes PHP support and **paired-tag
-  highlighting**. Do not describe roadmap features as implemented.
+- Maintain a roadmap that explicitly includes PHP support. Do not describe
+  remaining roadmap features as implemented.
 
 ## Acceptance criteria
 
@@ -85,6 +106,9 @@ plugin. PHP is out of scope for this release.
    tracked renames should avoid the full-buffer Tree-sitter parse that dominates
    the current rename latency. Compare the resulting timings with the existing
    behavior without imposing a machine-dependent test threshold.
+6. Focused highlighting tests cover nested and malformed markup, injections,
+   parser absence, cursor and edit invalidation, configuration, repeated setup,
+   and a representative 5,000-line document. Existing editing suites still pass.
 
 ## Repository discovery and presentation
 

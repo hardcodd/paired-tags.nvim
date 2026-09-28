@@ -1,9 +1,9 @@
-# paired-tags.nvim: auto-close and rename tags in Neovim
+# paired-tags.nvim: auto-close, rename, and highlight tags in Neovim
 
-Automatically close markup tags and keep matching tag names in sync while
-editing in Neovim. The plugin uses Tree-sitter for HTML, Django HTML templates,
-XML, JSX/TSX, Vue, Svelte, and HTML embedded in Markdown. It also provides an
-Enter mapping between adjacent HTML tags.
+Automatically close markup tags, keep matching names in sync, and highlight
+the pair under the cursor while editing in Neovim. The plugin uses Tree-sitter
+for HTML, Django HTML templates, XML, JSX/TSX, Vue, Svelte, and HTML embedded
+in Markdown. It also provides an Enter mapping between adjacent HTML tags.
 
 ![paired-tags.nvim preview with a matching JSX tag pair](assets/social-preview.png)
 
@@ -13,6 +13,7 @@ Enter mapping between adjacent HTML tags.
 | --- | --- |
 | Type `<section>` | Inserts `</section>` and keeps the cursor between the tags. |
 | Rename either name in `<section>...</section>` | Updates its matching name, including when the opening tag has attributes or spans lines. |
+| Place the cursor on either tag in `<section>...</section>` | Highlights both tag names. |
 | Press Enter at `<section>\|</section>` in HTML | Opens an indented content line and keeps the closing tag at the opener's indent. |
 
 The plugin supports `html`, `htmldjango`, `xml`, `javascriptreact`,
@@ -44,6 +45,16 @@ parsers. The Enter feature works in `html` and `htmldjango` only.
   same-name descendants, temporarily invalid markup, HTML optional end tags,
   raw-text elements, and multiline attributes.
 - Preserves JSX component spelling and XML case and UTF-8 names.
+
+### Highlight matching tags
+
+When the cursor is on either tag of an explicitly paired element, the plugin
+highlights both names. Nested elements show their own pair. Highlights update
+after text changes and clear when the cursor leaves the tag or buffer. The
+plugin skips incomplete or mismatched pairs, self-closing and void tags, and
+apparent tags in comments, strings, raw text, and Markdown code. Highlighting
+does not change buffer text. It uses a local parser update and at most two
+extmarks in the active buffer, including in large documents.
 
 ### Enter between HTML tags
 
@@ -91,13 +102,26 @@ require("paired_tags").setup()
 callbacks, and a paste wrapper used to distinguish streamed paste from typing.
 Calling it again in the same session is harmless. If another plugin also maps
 `<CR>`, configure that plugin not to replace this mapping; for example,
-`nvim-autopairs` can use `map_cr = false`. This plugin has no user options yet.
+`nvim-autopairs` can use `map_cr = false`.
+
+By default, the two highlight groups are `PairedTagsOpening` and
+`PairedTagsClosing`; both link to `MatchParen` unless your colorscheme defines
+them. To use other existing highlight groups, pass their names on the first
+`setup()` call:
+
+```lua
+require("paired_tags").setup({
+  highlight = { opening = "Search", closing = "Search" },
+})
+```
+
+Each name can be set independently. Later `setup()` calls preserve the initial
+configuration. Invalid option names or empty group names raise an error.
 
 ## Limits and roadmap
 
-PHP templates are not supported in this release. Visual highlighting of the
-current matching tag pair is also not implemented. Both are explicit roadmap
-items in [ROADMAP.md](ROADMAP.md).
+PHP templates are not supported in this release. Remaining proposed work is
+listed in [ROADMAP.md](ROADMAP.md).
 
 The plugin intentionally skips edits when the parser is absent or a pair
 cannot be identified safely. It does not auto-install parsers, format a whole
@@ -105,12 +129,12 @@ document, or add punctuation pairing for quotes and brackets.
 
 ## Verification
 
-The repository includes standalone tests for setup, HTML Enter, paired
-editing, 56 language scenarios, and four bug-regression suites (51, 35, 62,
-and 188 cases). Run from the repository root with an installed set of the
-parsers listed above. `tests/bootstrap.lua` uses the parsers in Neovim's
-standard data directory; set `PAIRED_TAGS_PARSER_RTP` to another parser
-runtime path if necessary.
+The repository includes standalone tests for setup, highlighting and its
+configuration, HTML Enter, paired editing, 56 language scenarios, and four
+bug-regression suites (51, 35, 62, and 188 cases). Run from the repository
+root with an installed set of the parsers listed above. `tests/bootstrap.lua`
+uses the parsers in Neovim's standard data directory; set
+`PAIRED_TAGS_PARSER_RTP` to another parser runtime path if necessary.
 
 ```sh
 nvim --headless -u NONE -i NONE -n \
@@ -121,14 +145,20 @@ nvim --headless -u NONE -i NONE -n \
 nvim --headless -u NONE -i NONE -n \
   '+luafile tests/bootstrap.lua' \
   '+luafile tests/tag_bug_report_4_spec.lua'
+
+nvim --headless -u NONE -i NONE -n \
+  '+lua local ok, err = pcall(dofile, "tests/highlight_config_spec.lua"); if not ok then print(err); vim.cmd("cquit") end' \
+  +qa!
 ```
 
 Replace the test path with `html_enter_spec.lua`,
-`paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
+`highlight_spec.lua`, `paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
 `tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
 `tag_bug_report_2_spec.lua`, or
 `tag_bug_report_3_spec.lua` to run the other suites. Synchronous tests need
 the `pcall`/`cquit` wrapper shown above; regression runners exit on their own.
+The highlight configuration suite runs without `tests/bootstrap.lua` so it
+can call `setup()` with custom options before defaults are registered.
 The contract and acceptance criteria are in [SPECS.md](SPECS.md).
 
 ## License
