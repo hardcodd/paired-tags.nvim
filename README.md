@@ -1,7 +1,5 @@
 # paired-tags.nvim: auto-close, rename, and highlight tags in Neovim
 
-[Русская версия](README.ru.md)
-
 Automatically close markup tags, keep matching names in sync, and highlight
 the pair under the cursor while editing in Neovim. The plugin uses Tree-sitter
 for HTML, Django and Jinja HTML templates, XML, JSX/TSX, Vue, Svelte, and HTML

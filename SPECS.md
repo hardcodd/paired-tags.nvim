@@ -154,9 +154,11 @@ plugin. PHP is out of scope for this release.
 - Target the currently verified Neovim 0.12.5 environment and avoid adding
   other dependencies. Preserve the current Lazy and Tree-sitter versions in the
   configuration unless their APIs require a separately approved change.
-- Keep repository documentation, comments, identifiers, and API documentation
-  in English. `README.md` must explain every shipped feature, prerequisites,
-  installation, settings, limitations, and testing commands. Use an MIT license.
+- Keep all repository documentation, comments, identifiers, and API
+  documentation in English. Do not publish translated documentation or links
+  to translated copies. `README.md` must explain every shipped feature,
+  prerequisites, installation, settings, limitations, and testing commands.
+  Use an MIT license.
 - Keep non-ASCII XML tag-name coverage with Greek test data.
 - Maintain a roadmap that explicitly includes PHP support. Do not describe
   remaining roadmap features as implemented.
