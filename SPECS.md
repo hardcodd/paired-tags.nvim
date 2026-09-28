@@ -63,11 +63,26 @@ plugin. PHP is out of scope for this release.
   delimiter, using the configured opening and closing groups. Clear stale
   marks on cursor or text changes, buffer switches, and parser failure. One
   active HTML or template pair is highlighted at a time.
+- When the cursor is on a parser-recognized branch keyword, highlight that
+  keyword and the opening keyword of its own block with the existing closing
+  and opening groups. This includes Django `elif`/`else`, `for`/`empty`,
+  `ifchanged`/`else`, and `blocktrans`/`blocktranslate` with `plural`, and Jinja
+  `elif`/`else` in `if` and `else` in `for`. Resolve nested branches to their nearest owning
+  block. Do not change block renaming or highlight a malformed or unrelated
+  branch.
+- In template filetypes, typing `{%`, `{{`, or `{#` inserts the matching `%}`,
+  `}}`, or `#}` immediately and leaves the cursor inside. Preserve a closer
+  already at the cursor. Typing a generated closer advances through it rather
+  than duplicating its characters. Completion of a `{% ... %}` statement
+  still inserts its matching `end...` block where applicable. Literal,
+  raw/verbatim, special-buffer, unsupported-filetype, and parser-unavailable
+  input retains native behavior. Nested template constructs must not consume
+  each other's generated closers.
 - Enter between adjacent matching block delimiters creates one content line
   at the effective buffer indent and places the closer at the opener's
   indent. Mismatched, incomplete, or nonadjacent delimiters retain native
-  Enter. Expression (`{{ ... }}`) and comment (`{# ... #}`) delimiters are
-  excluded from automatic pairing.
+  Enter. Expression (`{{ ... }}`) and comment (`{# ... #}`) delimiters do not
+  create block statements or receive block-keyword highlighting.
 
 - In supported normal editing buffers, typing `>` after a newly completed
   opening tag adds the matching closer and leaves the cursor between tags.
@@ -118,9 +133,9 @@ plugin. PHP is out of scope for this release.
   the pair and buffer revision have not changed. Large-buffer checks must
   verify bounded work without a machine-dependent timing threshold.
 - `setup()` registers the required callbacks and default Insert mappings for
-  `>`, `}`, and `<CR>`. Repeating `setup()` must not stack paste wrappers,
+  `>`, `{`, `%`, `#`, `}`, and `<CR>`. Repeating `setup()` must not stack paste wrappers,
   duplicate autocommands, or change behavior. It must not depend
-  on `functions.*` modules or this user's configuration. Keep both mappings
+  on `functions.*` modules or this user's configuration. Keep all mappings
   silent and nonrecursive, matching the source configuration.
 
 ## Integration and compatibility
@@ -168,6 +183,12 @@ plugin. PHP is out of scope for this release.
 8. Block tests cover parser-recognized forms, nested and existing closers,
    multiline openers, whitespace control, editing either keyword, highlighting,
    Enter, missing parsers, and non-pairing of expressions and comments.
+9. Branch tests assert exact extmark positions, groups, and ownership for each
+   supported branch form, including deep same-name nesting, multiple branches,
+   malformed input, and highlight invalidation.
+10. Delimiter tests cover typed and existing closers, block completion after a
+    generated `%}`, nested expressions and comments, literal/raw contexts,
+    multiline input, unsupported buffers, missing parsers, and repeated setup.
 
 ## Repository discovery and presentation
 

@@ -44,6 +44,13 @@ local django_blocks = {
   ["for"] = true, ifchanged = true, ["if"] = true, spaceless = true,
   verbatim = true, with = true,
 }
+local django_branches = {
+  ["if"] = { elif = true, ["else"] = true },
+  ["for"] = { empty = true },
+  ifchanged = { ["else"] = true },
+  blocktrans = { plural = true },
+  blocktranslate = { plural = true },
+}
 local html_text_elements = {
   script = true, style = true, textarea = true, title = true,
   xmp = true, iframe = true, noembed = true, noframes = true,
@@ -90,6 +97,7 @@ local changing = {} ---@type table<integer, boolean>
 local streaming_paste = {} ---@type table<integer, boolean>
 local pending_namespace = vim.api.nvim_create_namespace("PairedTagInput")
 local tracked_namespace = vim.api.nvim_create_namespace("PairedTagRename")
+local delimiter_namespace = vim.api.nvim_create_namespace("PairedTagDelimiter")
 local key_namespace = vim.api.nvim_create_namespace("PairedTagBeforeEdit")
 local highlight_namespace = vim.api.nvim_create_namespace("PairedTagHighlight")
 local highlight_groups = { opening = "PairedTagsOpening",
@@ -112,6 +120,7 @@ local normal_edit_keys = {
 ---@field ancestor_closers integer[]
 local pending = {} ---@type table<integer, PendingTag[]>
 local pending_blocks = {} ---@type table<integer, PendingTag[]>
+local generated_delimiters = {} ---@type table<integer, { id: integer, opening: integer, closer: string }[]>
 local template_pair_from_node ---@type fun(buf: integer, node: TSNode): TemplatePair?
 
 ---@class TrackedPair
@@ -602,6 +611,51 @@ local function template_pair_at(buf, row, col)
     if pair and (within_range(row, col, pair.open_start, pair.open_end)
       or within_range(row, col, pair.close_start, pair.close_end)) then
       return pair
+    end
+    node = node:parent()
+  end
+end
+
+--- Resolve a branch keyword to the opener of its parser-owned block.
+---@param buf integer
+---@param row integer
+---@param col integer
+---@return TagName?, TagName?
+local function template_branch_at(buf, row, col)
+  if not template_filetype[vim.bo[buf].filetype] then return nil end
+  local node = vim.treesitter.get_node({ bufnr = buf, pos = { row, col },
+    ignore_injections = true })
+  while node do
+    local kind = node:type()
+    if vim.bo[buf].filetype == "htmldjango"
+      and (kind == "branch_statement" or kind == "unpaired_statement") then
+      local owner = node:parent()
+      local pair = owner and template_pair_from_node(buf, owner)
+      if pair and django_branches[pair.opening.text] then
+        for child in node:iter_children() do
+          if child:type() == "tag_name" and not child:missing() then
+            local name = vim.treesitter.get_node_text(child, buf)
+            if django_branches[pair.opening.text][name] then
+              local first_row, first_col, last_row, last_col = child:range()
+              if first_row == last_row then
+                return pair.opening, { row = first_row, first = first_col,
+                  last = last_col, text = name }
+              end
+            end
+          end
+        end
+      end
+    elseif kind == "elif_statement" or kind == "else_statement" then
+      local branch = node:parent()
+      local owner = branch and branch:parent()
+      local pair = owner and template_pair_from_node(buf, owner)
+      if pair and (kind == "elif_statement" and pair.opening.text == "if"
+        or kind == "else_statement" and (pair.opening.text == "if"
+          or pair.opening.text == "for")) then
+        local keyword = template_keyword(buf, node,
+          kind == "elif_statement" and "elif" or "else")
+        if keyword then return pair.opening, keyword end
+      end
     end
     node = node:parent()
   end
@@ -1228,25 +1282,28 @@ function M.refresh_highlight(event)
   if template_pair then
     first, last = template_pair.opening, template_pair.closing
   else
-    local tag = tag_at(buf, row, col)
-    if not tag or inside_html_text_ancestor(buf, tag)
-      or inside_markdown_code(buf, row, col)
-      or inside_template_raw(buf, row, col) then
-      M.clear_highlight({ buf = buf })
-      return
-    end
-    local opener, closer = element_tags(tag)
-    if not opener or not closer or not completed_tag(opener)
-      or not completed_tag(closer)
-      or not same_template_branch(buf, opener, closer) then
-      M.clear_highlight({ buf = buf })
-      return
-    end
-    first = tag_name(buf, opener, false)
-    last = tag_name(buf, closer, true)
-    if not first or not last or not same_name(buf, first.text, last.text) then
-      M.clear_highlight({ buf = buf })
-      return
+    first, last = template_branch_at(buf, row, col)
+    if not first then
+      local tag = tag_at(buf, row, col)
+      if not tag or inside_html_text_ancestor(buf, tag)
+        or inside_markdown_code(buf, row, col)
+        or inside_template_raw(buf, row, col) then
+        M.clear_highlight({ buf = buf })
+        return
+      end
+      local opener, closer = element_tags(tag)
+      if not opener or not closer or not completed_tag(opener)
+        or not completed_tag(closer)
+        or not same_template_branch(buf, opener, closer) then
+        M.clear_highlight({ buf = buf })
+        return
+      end
+      first = tag_name(buf, opener, false)
+      last = tag_name(buf, closer, true)
+      if not first or not last or not same_name(buf, first.text, last.text) then
+        M.clear_highlight({ buf = buf })
+        return
+      end
     end
   end
   local positions = { first.row, first.first, first.last,
@@ -1844,6 +1901,195 @@ function M.complete_current_block()
   close_template_block(buf, row - 1, col)
 end
 
+local delimiter_closers = { ["%"] = "%}", ["{"] = "}}", ["#"] = "#}" }
+
+--- Recover the enclosing template context when incomplete input defeats the parser.
+---@param buf integer
+---@param row integer
+---@param col integer
+---@param start_row? integer
+---@param start_col? integer
+---@return "statement"|"expression"|"comment"? state
+---@return string? quote
+---@return integer depth
+local function template_context_before(buf, row, col, start_row, start_col)
+  local first_row = start_row or math.max(0, row - 128)
+  local lines = vim.api.nvim_buf_get_lines(buf, first_row, row + 1, false)
+  local state ---@type "statement"|"expression"|"comment"?
+  local quote ---@type string?
+  local depth = 0
+  for index, line in ipairs(lines) do
+    local limit = first_row + index - 1 == row and col or #line
+    local position = first_row + index - 1 == start_row
+      and (start_col or 0) + 1 or 1
+    while position <= limit do
+      local char = line:sub(position, position)
+      local next_char = position < limit
+        and line:sub(position + 1, position + 1) or ""
+      if state == "comment" then
+        if char == "#" and next_char == "}" then
+          state = nil
+          position = position + 1
+        end
+      elseif quote then
+        if char == "\\" then
+          position = position + 1
+        elseif char == quote then
+          quote = nil
+        end
+      elseif state == "statement" then
+        if char == '"' or char == "'" then
+          quote = char
+        elseif char == "%" and next_char == "}" then
+          state = nil
+          position = position + 1
+        end
+      elseif state == "expression" then
+        if char == '"' or char == "'" then
+          quote = char
+        elseif char == "{" then
+          depth = depth + 1
+        elseif char == "}" and depth > 0 then
+          depth = depth - 1
+        elseif char == "}" and next_char == "}" then
+          state = nil
+          position = position + 1
+        end
+      elseif char == "{" and (next_char == "%" or next_char == "{"
+        or next_char == "#") then
+        state = next_char == "%" and "statement"
+          or next_char == "{" and "expression" or "comment"
+        depth = 0
+        position = position + 1
+      end
+      position = position + 1
+    end
+  end
+  return state, quote, depth
+end
+
+--- Check the context before a second template-opening character is inserted.
+---@return boolean
+local function can_open_delimiter()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= "" or not template_filetype[vim.bo[buf].filetype]
+    or streaming_paste[buf] then return false end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  if col == 0 then return false end
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+  if line:sub(col, col) ~= "{" then return false end
+  local available, parser = pcall(vim.treesitter.get_parser, buf)
+  if not available or not parser or not pcall(function()
+    parser:parse({ row - 1, 0, row - 1, col + 1 })
+  end) then return false end
+  local state = template_context_before(buf, row - 1, col - 1)
+  if state then return false end
+  local node = vim.treesitter.get_node({ bufnr = buf,
+    pos = { row - 1, col - 1 }, ignore_injections = false })
+  while node do
+    local kind = node:type()
+    if kind == "string" or kind == "string_fragment"
+      or kind == "template_string"
+      or kind == "CData" or kind == "PI" or kind == "EntityValue"
+      or kind == "paired_comment" or kind == "raw_block"
+      or kind == "raw_body" then return false end
+    if kind == "paired_statement" and vim.bo[buf].filetype == "htmldjango" then
+      for child in node:iter_children() do
+        if child:type() == "tag_name"
+          and vim.treesitter.get_node_text(child, buf) == "verbatim" then
+          return false
+        end
+      end
+    end
+    if kind == "unpaired_comment" or kind == "comment" then
+      local start_row, start_col = node:range()
+      if start_row ~= row - 1 or start_col ~= col - 1 then return false end
+    end
+    node = node:parent()
+  end
+  return true
+end
+
+--- Advance over a generated closer character only while its text is intact.
+---@param character string
+---@return string? closer
+local function skip_generated_delimiter(character)
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= ""
+    or not template_filetype[vim.bo[buf].filetype] then return nil end
+  local records = generated_delimiters[buf]
+  if not records then return nil end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+  for index = #records, 1, -1 do
+    local record = records[index]
+    local position = vim.api.nvim_buf_get_extmark_by_id(buf,
+      delimiter_namespace, record.id, {})
+    local opening = vim.api.nvim_buf_get_extmark_by_id(buf,
+      delimiter_namespace, record.opening, {})
+    local valid = #position == 2 and #opening == 2
+    if valid then
+      local marker_line = vim.api.nvim_buf_get_lines(buf, position[1],
+        position[1] + 1, false)[1]
+      local opening_line = vim.api.nvim_buf_get_lines(buf, opening[1],
+        opening[1] + 1, false)[1]
+      valid = marker_line and marker_line:sub(position[2] + 1,
+        position[2] + #record.closer) == record.closer
+        and opening_line and opening_line:sub(opening[2] + 1,
+          opening[2] + 2) == (record.closer == "}}"
+            and "{{" or "{" .. record.closer:sub(1, 1))
+    end
+    if not valid then
+      vim.api.nvim_buf_del_extmark(buf, delimiter_namespace, record.id)
+      vim.api.nvim_buf_del_extmark(buf, delimiter_namespace, record.opening)
+      table.remove(records, index)
+    elseif position[1] == row - 1 then
+      local offset = col - position[2] + 1
+      if record.closer:sub(offset, offset) == character
+        and line:sub(col + 1, col + 1) == character then
+        local state, quote, depth = template_context_before(buf, row - 1, col,
+          opening[1], opening[2])
+        local expected = record.closer == "%}" and "statement"
+          or record.closer == "}}" and "expression" or "comment"
+        if state ~= expected or quote or expected == "expression" and depth > 0 then
+          return nil
+        end
+        if offset == #record.closer then
+          vim.api.nvim_buf_del_extmark(buf, delimiter_namespace, record.id)
+          vim.api.nvim_buf_del_extmark(buf, delimiter_namespace, record.opening)
+          table.remove(records, index)
+        end
+        return record.closer
+      end
+    end
+  end
+  return nil
+end
+
+--- Complete one of the three template delimiter pairs at the cursor.
+---@param character "%"|"{"|"#"
+---@return nil
+function M.complete_current_delimiter(character)
+  local closer = delimiter_closers[character]
+  if not closer then return end
+  local buf = vim.api.nvim_get_current_buf()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+  if col < 2 or line:sub(col - 1, col) ~= "{" .. character then return end
+  if line:sub(col + 1, col + #closer) ~= closer then
+    changing[buf] = true
+    vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { closer })
+    changing[buf] = nil
+  end
+  local opening = vim.api.nvim_buf_set_extmark(buf, delimiter_namespace,
+    row - 1, col - 2, { right_gravity = false })
+  local id = vim.api.nvim_buf_set_extmark(buf, delimiter_namespace,
+    row - 1, col, { right_gravity = true })
+  generated_delimiters[buf] = generated_delimiters[buf] or {}
+  table.insert(generated_delimiters[buf],
+    { id = id, opening = opening, closer = closer })
+end
+
 --- Insert `>` and synchronously complete markup tags in supported buffers.
 ---@return string
 function M.gt()
@@ -1851,12 +2097,52 @@ function M.gt()
   return "><Cmd>lua require('paired_tags').complete_current()<CR>"
 end
 
+--- Insert `{` and complete `{{ ... }}` in a template editing context.
+---@return string
+function M.open_brace()
+  if can_open_delimiter() then
+    return "{<Cmd>lua require('paired_tags').complete_current_delimiter('{')<CR>"
+  end
+  return "{"
+end
+
+--- Insert `%`, pair `{% ... %}`, or advance over its generated closer.
+---@return string
+function M.percent()
+  if skip_generated_delimiter("%") then return "<Right>" end
+  if can_open_delimiter() then
+    return "%<Cmd>lua require('paired_tags').complete_current_delimiter('%')<CR>"
+  end
+  return "%"
+end
+
+--- Insert `#`, pair `{# ... #}`, or advance over its generated closer.
+---@return string
+function M.hash()
+  if skip_generated_delimiter("#") then return "<Right>" end
+  if can_open_delimiter() then
+    return "#<Cmd>lua require('paired_tags').complete_current_delimiter('#')<CR>"
+  end
+  return "#"
+end
+
 --- Insert a brace and complete a template opener in template buffers.
 ---@return string
 function M.brace()
+  local skipped = skip_generated_delimiter("}")
+  if skipped then
+    if skipped == "%}" then
+      return "<Right><Cmd>lua require('paired_tags').complete_current_block()<CR>"
+    end
+    return "<Right>"
+  end
   if vim.bo.buftype ~= "" or not template_filetype[vim.bo.filetype] then
     return "}"
   end
+  local buf = vim.api.nvim_get_current_buf()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local state, quote = template_context_before(buf, row - 1, col)
+  if state ~= "statement" or quote then return "}" end
   return "}<Cmd>lua require('paired_tags').complete_current_block()<CR>"
 end
 
@@ -1997,6 +2283,9 @@ function M.setup(options)
       desc = "Remember the paired tag before editing its name" })
   vim.api.nvim_create_autocmd("BufWipeout", { group = group,
     callback = M.clear_tracked, desc = "Release remembered paired tag positions" })
+  vim.api.nvim_create_autocmd("BufWipeout", { group = group,
+    callback = function(event) generated_delimiters[event.buf] = nil end,
+    desc = "Release generated template delimiter positions" })
   vim.api.nvim_create_autocmd({ "InsertLeave", "BufWipeout" }, { group = group,
     callback = clear_streaming_paste, desc = "Clear streamed paste state" })
   vim.api.nvim_create_autocmd("InsertCharPre", { group = group,
@@ -2023,6 +2312,12 @@ function M.setup(options)
   })
   vim.keymap.set("i", ">", M.gt,
     { expr = true, silent = true, desc = "Close a completed markup tag" })
+  vim.keymap.set("i", "{", M.open_brace,
+    { expr = true, silent = true, desc = "Open a template expression" })
+  vim.keymap.set("i", "%", M.percent,
+    { expr = true, silent = true, desc = "Close a template statement delimiter" })
+  vim.keymap.set("i", "#", M.hash,
+    { expr = true, silent = true, desc = "Close a template comment delimiter" })
   vim.keymap.set("i", "}", M.brace,
     { expr = true, silent = true, desc = "Close a completed template block" })
   vim.keymap.set("i", "<CR>", M.html_enter,

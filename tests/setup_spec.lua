@@ -21,7 +21,7 @@ tags.setup()
 assert(vim.paste == original_paste, "repeated setup must not wrap paste again")
 assert(#vim.api.nvim_get_autocmds({ group = "PairedTags" }) == #callbacks,
   "repeated setup must not duplicate callbacks")
-for _, key in ipairs({ ">", "<CR>" }) do
+for _, key in ipairs({ ">", "{", "%", "#", "}", "<CR>" }) do
   local mapping = vim.fn.maparg(key, "i", false, true)
   assert(mapping.expr == 1 and mapping.silent == 1 and mapping.noremap == 1,
     "setup must install a silent nonrecursive expression mapping for " .. key)

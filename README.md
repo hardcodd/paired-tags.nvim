@@ -20,6 +20,8 @@ provides an Enter mapping between adjacent pairs.
 | Press Enter at `<section>\|</section>` in HTML | Opens an indented content line and keeps the closing tag at the opener's indent. |
 | Type `{% if active %}` in a Django or Jinja HTML template | Inserts `{% endif %}` at the cursor. |
 | Rename either keyword in `{% if %}...{% endif %}` | Updates its matching block keyword. |
+| Place the cursor on `{% else %}` | Highlights `else` and the `if` or `for` that owns it. |
+| Type `{%`, `{{`, or `{#` in a template | Inserts `%}`, `}}`, or `#}` and keeps the cursor inside. |
 
 The plugin supports `html`, `htmldjango`, `jinja`, `jinja2`, `xml`,
 `javascriptreact`, `typescriptreact`, `vue`, `svelte`, and HTML embedded in
@@ -85,7 +87,17 @@ adjacent matching block delimiters. Supported Django blocks include `if`,
 blocks include `if`, `for`, `block`, `macro`, `call`, `filter`, block-form
 `set`, `with`, `autoescape`, `trans`, and `raw`. Jinja whitespace-control
 delimiters are supported. Unpaired statements such as `include` stay unchanged.
-The plugin does not automatically pair `{{ ... }}` or `{# ... #}`.
+When the cursor is on a branch keyword, the plugin highlights it with its
+owning opener: Django `elif`/`else`, `for`/`empty`, `ifchanged`/`else`, and
+`blocktrans` or `blocktranslate` with `plural`; Jinja `if`/`elif`/`else` and `for`/`else`. Nested
+branches highlight their nearest owner. Renaming remains limited to the
+opening and closing block keywords.
+
+Typing `{%`, `{{`, or `{#` inserts the matching delimiter and keeps the cursor
+inside. Typing its generated closing characters moves through them. An
+existing closer at the insertion point is preserved. Expression and comment
+delimiters do not create block statements. Template delimiters typed inside
+strings, comments, and raw or verbatim bodies remain literal.
 
 ## Requirements
 
@@ -102,9 +114,9 @@ The plugin does not automatically pair `{{ ... }}` or `{# ... #}`.
   configuration; `nvim-treesitter` may be used for that purpose but is not a
   runtime dependency of this plugin.
 
-When a parser is unavailable, parser-dependent closing, renaming, and
-highlighting leave the buffer alone. HTML Enter does not require a parser;
-template block Enter requires one.
+When a parser is unavailable, parser-dependent closing, renaming, delimiter
+completion, and highlighting leave the buffer alone. HTML Enter does not
+require a parser; template block Enter requires one.
 
 ## Installation
 
@@ -126,8 +138,9 @@ call:
 require("paired_tags").setup()
 ```
 
-`setup()` installs Insert-mode `>`, `}`, and `<CR>` mappings, text-change and cursor
-callbacks, and a paste wrapper used to distinguish streamed paste from typing.
+`setup()` installs Insert-mode `>`, `{`, `%`, `#`, `}`, and `<CR>` mappings,
+text-change and cursor callbacks, and a paste wrapper used to distinguish
+streamed paste from typing.
 Calling it again in the same session is harmless. If another plugin also maps
 `<CR>`, configure that plugin not to replace this mapping; for example,
 `nvim-autopairs` can use `map_cr = false`.
@@ -153,7 +166,7 @@ listed in [ROADMAP.md](ROADMAP.md).
 
 The plugin intentionally skips edits when the parser is absent or a pair
 cannot be identified safely. It does not auto-install parsers, format a whole
-document, or add punctuation pairing for quotes and brackets.
+document, or add general punctuation pairing for quotes and brackets.
 
 ## Verification
 
@@ -183,7 +196,8 @@ nvim --headless -u NONE -i NONE -n \
 ```
 
 Replace the test path with `template_html_spec.lua`,
-`template_blocks_spec.lua`, `html_enter_spec.lua`,
+`template_blocks_spec.lua`, `template_branches_spec.lua`,
+`template_delimiters_spec.lua`, `html_enter_spec.lua`,
 `highlight_spec.lua`, `paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
 `tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
 `tag_bug_report_2_spec.lua`, or
