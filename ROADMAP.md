@@ -1,7 +1,8 @@
 # Roadmap
 
 This file tracks proposed work; none of the items below is part of the
-current release.
+current release. Django and Jinja HTML templates and their block pairs are
+documented as current behavior in [README.md](README.md).
 
 1. **PHP support.** Define the supported PHP template forms, choose and
    validate the parser(s), and cover boundaries between PHP expressions and

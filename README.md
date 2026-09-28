@@ -1,9 +1,12 @@
 # paired-tags.nvim: auto-close, rename, and highlight tags in Neovim
 
+[Русская версия](README.ru.md)
+
 Automatically close markup tags, keep matching names in sync, and highlight
 the pair under the cursor while editing in Neovim. The plugin uses Tree-sitter
-for HTML, Django HTML templates, XML, JSX/TSX, Vue, Svelte, and HTML embedded
-in Markdown. It also provides an Enter mapping between adjacent HTML tags.
+for HTML, Django and Jinja HTML templates, XML, JSX/TSX, Vue, Svelte, and HTML
+embedded in Markdown. It also pairs Django and Jinja block statements and
+provides an Enter mapping between adjacent pairs.
 
 ![paired-tags.nvim preview with a matching JSX tag pair](assets/social-preview.png)
 
@@ -15,11 +18,14 @@ in Markdown. It also provides an Enter mapping between adjacent HTML tags.
 | Rename either name in `<section>...</section>` | Updates its matching name, including when the opening tag has attributes or spans lines. |
 | Place the cursor on either tag in `<section>...</section>` | Highlights both tag names. |
 | Press Enter at `<section>\|</section>` in HTML | Opens an indented content line and keeps the closing tag at the opener's indent. |
+| Type `{% if active %}` in a Django or Jinja HTML template | Inserts `{% endif %}` at the cursor. |
+| Rename either keyword in `{% if %}...{% endif %}` | Updates its matching block keyword. |
 
-The plugin supports `html`, `htmldjango`, `xml`, `javascriptreact`,
-`typescriptreact`, `vue`, `svelte`, and HTML embedded in `markdown`. It uses the
-current buffer's Tree-sitter parser to identify tags; it does not install
-parsers. The Enter feature works in `html` and `htmldjango` only.
+The plugin supports `html`, `htmldjango`, `jinja`, `jinja2`, `xml`,
+`javascriptreact`, `typescriptreact`, `vue`, `svelte`, and HTML embedded in
+`markdown`. It uses Tree-sitter to identify tags and template blocks; it does
+not install parsers. HTML Enter works in `html`, `htmldjango`, `jinja`, and
+`jinja2`.
 
 ### Automatic tag closing
 
@@ -64,19 +70,41 @@ uses the buffer's effective `shiftwidth`, `expandtab`, and `tabstop`, so a
 project's EditorConfig settings can govern it. A mismatched pair, completion
 popup, special buffer, or other filetype keeps normal Enter behavior.
 
+### Django and Jinja HTML templates
+
+HTML tag closing, renaming, highlighting, and Enter work in `htmldjango`,
+`jinja`, and `jinja2`. Template statements, expressions, comments, and raw or
+verbatim bodies are excluded from HTML edits. If tags cross different template
+branches, the plugin avoids treating them as a safe pair.
+
+The same template filetypes support block completion after the final `}`,
+paired keyword renaming and highlighting, and Enter indentation between
+adjacent matching block delimiters. Supported Django blocks include `if`,
+`for`, `block`, `comment`, `verbatim`, `autoescape`, `filter`, `with`,
+`spaceless`, `ifchanged`, and `blocktrans`/`blocktranslate`. Supported Jinja
+blocks include `if`, `for`, `block`, `macro`, `call`, `filter`, block-form
+`set`, `with`, `autoescape`, `trans`, and `raw`. Jinja whitespace-control
+delimiters are supported. Unpaired statements such as `include` stay unchanged.
+The plugin does not automatically pair `{{ ... }}` or `{# ... #}`.
+
 ## Requirements
 
 - Neovim 0.12.5 is the tested version. Older versions have not been verified.
+- Template tests used `htmldjango` grammar revision `a1031889` and `jinja` /
+  `jinja_inline` revision `c213d374`. Other grammar revisions have not been
+  verified against these node shapes.
 - A working Tree-sitter parser for each language where tag closing or renaming
-  is needed: `html`, `htmldjango`, `xml`, `javascript` for
+  is needed: `html`; `htmldjango` and `html` for Django templates; `jinja`,
+  `jinja_inline`, and `html` for Jinja templates; `xml`; `javascript` for
   `javascriptreact`, `tsx` for `typescriptreact`, `vue`, `svelte`, and
   `markdown` and `html` for HTML embedded in Markdown. Parser installation is
   managed by your Neovim
   configuration; `nvim-treesitter` may be used for that purpose but is not a
   runtime dependency of this plugin.
 
-When the parser is unavailable, tag closing and renaming leave the buffer
-alone. The HTML Enter mapping does not require a parser.
+When a parser is unavailable, parser-dependent closing, renaming, and
+highlighting leave the buffer alone. HTML Enter does not require a parser;
+template block Enter requires one.
 
 ## Installation
 
@@ -98,7 +126,7 @@ call:
 require("paired_tags").setup()
 ```
 
-`setup()` installs Insert-mode `>` and `<CR>` mappings, text-change and cursor
+`setup()` installs Insert-mode `>`, `}`, and `<CR>` mappings, text-change and cursor
 callbacks, and a paste wrapper used to distinguish streamed paste from typing.
 Calling it again in the same session is harmless. If another plugin also maps
 `<CR>`, configure that plugin not to replace this mapping; for example,
@@ -131,10 +159,13 @@ document, or add punctuation pairing for quotes and brackets.
 
 The repository includes standalone tests for setup, highlighting and its
 configuration, HTML Enter, paired editing, 56 language scenarios, and four
-bug-regression suites (51, 35, 62, and 188 cases). Run from the repository
+bug-regression suites (51, 35, 62, and 188 cases), plus Django and Jinja
+template editing. Run from the repository
 root with an installed set of the parsers listed above. `tests/bootstrap.lua`
 uses the parsers in Neovim's standard data directory; set
-`PAIRED_TAGS_PARSER_RTP` to another parser runtime path if necessary.
+`PAIRED_TAGS_PARSER_RTP` to another complete parser and query runtime path if
+necessary. If Jinja parsers are installed separately, append their directory
+to `runtimepath` after `tests/bootstrap.lua`.
 
 ```sh
 nvim --headless -u NONE -i NONE -n \
@@ -151,7 +182,8 @@ nvim --headless -u NONE -i NONE -n \
   +qa!
 ```
 
-Replace the test path with `html_enter_spec.lua`,
+Replace the test path with `template_html_spec.lua`,
+`template_blocks_spec.lua`, `html_enter_spec.lua`,
 `highlight_spec.lua`, `paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
 `tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
 `tag_bug_report_2_spec.lua`, or

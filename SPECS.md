@@ -9,13 +9,65 @@ on that configuration's Lua modules. The public plugin must be usable through
 `require("paired_tags").setup()`
 and through a `lazy.nvim` plugin specification.
 
-The first release supports `html`, `htmldjango`, `xml`, `javascriptreact`,
-`typescriptreact`, `vue`, `svelte`, and embedded markup in `markdown`. A working
+The plugin supports `html`, `htmldjango`, `jinja`, `jinja2`, `xml`,
+`javascriptreact`, `typescriptreact`, `vue`, `svelte`, and embedded markup in
+`markdown`. A working
 Tree-sitter parser for the current language is required for tag completion and
 rename. No parser installation or external Lua dependency is performed by the
 plugin. PHP is out of scope for this release.
 
 ## Behavior
+
+### HTML tags in Django and Jinja templates
+
+- Apply automatic HTML tag closing, paired-name renaming, paired-name
+  highlighting, and the adjacent-tag Enter action inside Django HTML and
+  Jinja HTML templates. Support the `htmldjango`, `jinja`, and `jinja2`
+  filetypes. `jinja` and `jinja2` use the Jinja Tree-sitter parser; HTML
+  content uses an injected HTML parser. The plugin supplies the required
+  injection queries without installing parsers or adding a Lua dependency.
+- Treat `{% ... %}`, `{{ ... }}`, `{# ... #}`, Django `{% comment %}` and
+  `{% verbatim %}`, and Jinja `{% raw %}` as template syntax. Never create or
+  rename an HTML tag inside those regions, including quoted text that looks
+  like markup. HTML tags in literal content on either side of template
+  directives retain normal editing behavior.
+- Pair HTML tags across template directives only when the parser and lexical
+  structure identify one unambiguous mate. Branches may render different
+  markup; skip a change rather than alter an unrelated branch or ancestor.
+  Preserve template expressions in attributes and multiline opening tags.
+- Retain existing behavior for all previously supported filetypes and for
+  missing or broken parsers. Keep large-buffer refreshes and rename paths
+  bounded as specified below.
+
+### Django and Jinja block pairs
+
+- In `htmldjango`, `jinja`, and `jinja2`, recognize block forms represented
+  by the installed language parser. This includes Django `if`, `for`, `block`,
+  `autoescape`, `filter`, `with`, `verbatim`, `comment`, `spaceless`,
+  `ifchanged`, and `blocktrans`/`blocktranslate`, and Jinja `if`, `for`,
+  `block`, `macro`, `call`, `filter`, `set` blocks, `with`, `autoescape`,
+  `trans`, and `raw`. Unpaired statements such as `include` and `extends`
+  remain untouched. Unknown or custom tags are not inferred from text alone.
+- Typing the final `}` of a complete new `{% ... %}` block opener inserts the
+  corresponding `{% end... %}` and leaves the cursor between them. Preserve
+  an existing, parser-confirmed matching closer. Do not consume an ancestor's
+  or another branch's closer, duplicate a closer, or complete an opener in a
+  comment, string, raw/verbatim body, or incomplete statement. Support
+  nesting and Jinja whitespace-control delimiters (`{%-`, `-%}`).
+- Renaming either block keyword updates only its explicit mate, preserving
+  arguments, optional block labels, whitespace control, branch statements,
+  and unrelated nested blocks. If the edited syntax no longer establishes an
+  unambiguous pair, leave other text unchanged. Block labels are not
+  automatically renamed.
+- Highlight the two paired block keywords while the cursor is on either
+  delimiter, using the configured opening and closing groups. Clear stale
+  marks on cursor or text changes, buffer switches, and parser failure. One
+  active HTML or template pair is highlighted at a time.
+- Enter between adjacent matching block delimiters creates one content line
+  at the effective buffer indent and places the closer at the opener's
+  indent. Mismatched, incomplete, or nonadjacent delimiters retain native
+  Enter. Expression (`{{ ... }}`) and comment (`{# ... #}`) delimiters are
+  excluded from automatic pairing.
 
 - In supported normal editing buffers, typing `>` after a newly completed
   opening tag adds the matching closer and leaves the cursor between tags.
@@ -29,9 +81,9 @@ plugin. PHP is out of scope for this release.
   names. Handle multiline, paste, rapid input, temporarily malformed markup,
   HTML optional end tags, and changes on either side of the pair. If pairing is
   ambiguous, avoid modifying another element.
-- In `html` and `htmldjango`, one Enter between adjacent matching tags such as
-  `<div>|</div>` creates an indented content line and places the closer at the
-  opening tag's indent. Use the buffer's effective indentation options,
+- In `html`, `htmldjango`, `jinja`, and `jinja2`, one Enter between adjacent
+  matching tags such as `<div>|</div>` creates an indented content line and
+  places the closer at the opening tag's indent. Use effective indentation,
   including EditorConfig overrides. In other contexts, return native Enter.
 - Feature handling is inactive in special buffers and in filetypes outside the
   supported set. Missing or broken parsers must not cause unrelated buffer
@@ -66,8 +118,8 @@ plugin. PHP is out of scope for this release.
   the pair and buffer revision have not changed. Large-buffer checks must
   verify bounded work without a machine-dependent timing threshold.
 - `setup()` registers the required callbacks and default Insert mappings for
-  `>` and `<CR>`. Repeating `setup()` must not stack paste wrappers, duplicate
-  autocommands, or change the plugin's observable behavior. It must not depend
+  `>`, `}`, and `<CR>`. Repeating `setup()` must not stack paste wrappers,
+  duplicate autocommands, or change behavior. It must not depend
   on `functions.*` modules or this user's configuration. Keep both mappings
   silent and nonrecursive, matching the source configuration.
 
@@ -109,6 +161,13 @@ plugin. PHP is out of scope for this release.
 6. Focused highlighting tests cover nested and malformed markup, injections,
    parser absence, cursor and edit invalidation, configuration, repeated setup,
    and a representative 5,000-line document. Existing editing suites still pass.
+7. Django and Jinja HTML tests cover the three filetypes, injected HTML across
+   statements, expressions in attributes, multiline tags, raw/comment bodies,
+   branch ambiguity, rename in both directions, highlighting, Enter, and a
+   representative 5,000-line template.
+8. Block tests cover parser-recognized forms, nested and existing closers,
+   multiline openers, whitespace control, editing either keyword, highlighting,
+   Enter, missing parsers, and non-pairing of expressions and comments.
 
 ## Repository discovery and presentation
 

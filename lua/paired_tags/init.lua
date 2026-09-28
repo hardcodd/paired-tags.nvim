@@ -4,6 +4,7 @@ local configured = false
 local supported = {
   html = true, xml = true, htmldjango = true, javascriptreact = true,
   typescriptreact = true, vue = true, svelte = true, markdown = true,
+  jinja = true, jinja2 = true,
 }
 local jsx_filetype = { javascriptreact = true, typescriptreact = true }
 local opening = { start_tag = true, STag = true, jsx_opening_element = true }
@@ -19,7 +20,30 @@ local html_void = {
   hr = true, img = true, input = true, link = true, meta = true,
   param = true, source = true, track = true, wbr = true,
 }
-local html_syntax = { html = true, htmldjango = true, markdown = true }
+local html_syntax = {
+  html = true, htmldjango = true, markdown = true,
+  jinja = true, jinja2 = true,
+}
+local template_filetype = { htmldjango = true, jinja = true, jinja2 = true }
+local jinja_blocks = {
+  if_block = { "if", "endif" },
+  for_block = { "for", "endfor" },
+  block_block = { "block", "endblock" },
+  macro_block = { "macro", "endmacro" },
+  call_block = { "call", "endcall" },
+  filter_block = { "filter", "endfilter" },
+  set_block = { "set", "endset" },
+  with_block = { "with", "endwith" },
+  autoescape_block = { "autoescape", "endautoescape" },
+  trans_block = { "trans", "endtrans" },
+  raw_block = { "raw", "endraw" },
+}
+local django_blocks = {
+  autoescape = true, block = true, blocktrans = true,
+  blocktranslate = true, comment = true, filter = true,
+  ["for"] = true, ifchanged = true, ["if"] = true, spaceless = true,
+  verbatim = true, with = true,
+}
 local html_text_elements = {
   script = true, style = true, textarea = true, title = true,
   xmp = true, iframe = true, noembed = true, noframes = true,
@@ -87,6 +111,8 @@ local normal_edit_keys = {
 ---@field opener integer
 ---@field ancestor_closers integer[]
 local pending = {} ---@type table<integer, PendingTag[]>
+local pending_blocks = {} ---@type table<integer, PendingTag[]>
+local template_pair_from_node ---@type fun(buf: integer, node: TSNode): TemplatePair?
 
 ---@class TrackedPair
 ---@field source integer
@@ -97,6 +123,7 @@ local pending = {} ---@type table<integer, PendingTag[]>
 ---@field source_first integer
 ---@field source_last integer
 ---@field fast_valid boolean
+---@field kind? "template"
 local tracked = {} ---@type table<integer, TrackedPair>
 local attached = {} ---@type table<integer, boolean>
 
@@ -180,6 +207,52 @@ local function element_tags(node)
   return start_tag, end_tag
 end
 
+--- Reject an injected HTML pair whose tags occupy different template branches.
+---@param buf integer
+---@param first TSNode
+---@param last TSNode
+---@return boolean
+local function same_template_branch(buf, first, last)
+  if not template_filetype[vim.bo[buf].filetype] then return true end
+  local first_row, first_col = first:range()
+  local last_row, last_col = last:range()
+  local function ancestors(row, col)
+    local result = {} ---@type table<string, TSNode>
+    local node = vim.treesitter.get_node({ bufnr = buf,
+      pos = { row, col }, ignore_injections = true })
+    while node do
+      local kind = node:type()
+      if kind == "paired_statement" or jinja_blocks[kind]
+        or kind == "else_block" or kind == "elif_block" then
+        local a, b, c, d = node:range()
+        result[kind .. ":" .. a .. ":" .. b .. ":" .. c .. ":" .. d] = node
+      end
+      node = node:parent()
+    end
+    return result
+  end
+  local left = ancestors(first_row, first_col)
+  local right = ancestors(last_row, last_col)
+  for key, node in pairs(left) do
+    if not right[key] then return false end
+    if node:type() == "paired_statement" then
+      for child in node:iter_children() do
+        if child:type() == "branch_statement" then
+          local row, col = child:range()
+          if (row > first_row or row == first_row and col > first_col)
+            and (row < last_row or row == last_row and col < last_col) then
+            return false
+          end
+        end
+      end
+    end
+  end
+  for key in pairs(right) do
+    if not left[key] then return false end
+  end
+  return true
+end
+
 ---@param buf integer
 ---@param record PendingTag
 local function release_pending(buf, record)
@@ -189,13 +262,15 @@ local function release_pending(buf, record)
   end
 end
 
---- Remember which closing tags belonged to ancestors before a new `<`.
+--- Remember ancestor closers before a new tag or template block opener.
 --- Parser recovery after insertion cannot distinguish a new same-name child
 --- from the ancestor that already owns the next closing tag.
 ---@param event vim.api.keyset.create_autocmd.callback_args
 ---@return nil
 function M.before_char(event)
-  if vim.v.char ~= "<" or vim.bo[event.buf].buftype ~= ""
+  local char = vim.v.char
+  if char ~= "<" and char ~= "{" or vim.bo[event.buf].buftype ~= ""
+    or char == "{" and not template_filetype[vim.bo[event.buf].filetype]
     or not supported[vim.bo[event.buf].filetype] then return end
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   local available, parser = pcall(vim.treesitter.get_parser, event.buf)
@@ -206,7 +281,14 @@ function M.before_char(event)
     pos = { row - 1, math.max(0, col - 1) }, ignore_injections = false })
   local closers = {} ---@type integer[]
   while node do
-    if elements[node:type()] then
+    if char == "{" and template_filetype[vim.bo[event.buf].filetype] then
+      local pair = template_pair_from_node(event.buf, node)
+      if pair then
+        closers[#closers + 1] = vim.api.nvim_buf_set_extmark(event.buf,
+          pending_namespace, pair.close_start[1], pair.close_start[2],
+          { right_gravity = true })
+      end
+    elseif char == "<" and elements[node:type()] then
       for child in node:iter_children() do
         if closing[child:type()] then
           local end_row, end_col = child:range()
@@ -217,14 +299,15 @@ function M.before_char(event)
     end
     node = node:parent()
   end
-  local records = pending[event.buf] or {} ---@type PendingTag[]
+  local collection = char == "{" and pending_blocks or pending
+  local records = collection[event.buf] or {} ---@type PendingTag[]
   if #records >= 64 then release_pending(event.buf, table.remove(records, 1)) end
   records[#records + 1] = {
     opener = vim.api.nvim_buf_set_extmark(event.buf, pending_namespace,
       row - 1, col, { right_gravity = false }),
     ancestor_closers = closers,
   }
-  pending[event.buf] = records
+  collection[event.buf] = records
 end
 
 --- Discard input snapshots when an Insert session or buffer ends.
@@ -235,14 +318,17 @@ function M.clear_pending(event)
     release_pending(event.buf, record)
   end
   pending[event.buf] = nil
+  for _, record in ipairs(pending_blocks[event.buf] or {}) do
+    release_pending(event.buf, record)
+  end
+  pending_blocks[event.buf] = nil
 end
 
 ---@param buf integer
 ---@param tag TSNode
 ---@return PendingTag?, integer?
-local function pending_for(buf, tag)
-  local row, col = tag:range()
-  local records = pending[buf] or {}
+local function pending_at(buf, row, col, collection)
+  local records = collection[buf] or {}
   for index = #records, 1, -1 do
     local position = vim.api.nvim_buf_get_extmark_by_id(buf,
       pending_namespace, records[index].opener, {})
@@ -250,6 +336,14 @@ local function pending_for(buf, tag)
       return records[index], index
     end
   end
+end
+
+---@param buf integer
+---@param tag TSNode
+---@return PendingTag?, integer?
+local function pending_for(buf, tag)
+  local row, col = tag:range()
+  return pending_at(buf, row, col, pending)
 end
 
 ---@param buf integer
@@ -309,6 +403,318 @@ local function inside_literal(buf, row, col)
     node = node:parent()
   end
   return false
+end
+
+--- Template raw blocks are parsed as content by some grammar revisions.
+---@param buf integer
+---@param row integer
+---@param col integer
+---@return boolean
+local function inside_template_raw(buf, row, col)
+  local filetype = vim.bo[buf].filetype
+  if filetype ~= "htmldjango" and filetype ~= "jinja"
+    and filetype ~= "jinja2" then return false end
+  local node = vim.treesitter.get_node({ bufnr = buf, pos = { row, col },
+    ignore_injections = true })
+  while node do
+    local kind = node:type()
+    if kind == "raw_block" or kind == "raw_body"
+      or kind == "paired_comment" or kind == "unpaired_comment" then
+      return true
+    end
+    if filetype == "htmldjango" and kind == "paired_statement" then
+      for child in node:iter_children() do
+        if child:type() == "tag_name"
+          and vim.treesitter.get_node_text(child, buf) == "verbatim" then
+          return true
+        end
+      end
+    end
+    node = node:parent()
+  end
+  return false
+end
+
+---@class TemplatePair
+---@field opening TagName
+---@field closing TagName
+---@field open_start integer[]
+---@field open_end integer[]
+---@field close_start integer[]
+---@field close_end integer[]
+
+---@param node TSNode
+---@param text string
+---@return TSNode?
+local function descendant_token(node, text)
+  for child in node:iter_children() do
+    if child:type() == text and not child:missing() then return child end
+    local found = descendant_token(child, text)
+    if found then return found end
+  end
+end
+
+---@param buf integer
+---@param node TSNode
+---@param text string
+---@return TagName?
+local function template_keyword(buf, node, text)
+  local token = descendant_token(node, text)
+  if token then
+    local row, first, last_row, last = token:range()
+    if row == last_row then
+      return { row = row, first = first, last = last, text = text }
+    end
+  end
+  if node:type() == "raw_start" or node:type() == "raw_end" then
+    local source = vim.treesitter.get_node_text(node, buf)
+    local first = source:find(text, 1, true)
+    if first then
+      local row, col = node:range()
+      return { row = row, first = col + first - 1,
+        last = col + first - 1 + #text, text = text }
+    end
+  end
+end
+
+---@param node TSNode
+---@return integer[]
+local function node_start(node)
+  local row, col = node:range()
+  return { row, col }
+end
+
+---@param node TSNode
+---@return integer[]
+local function node_end(node)
+  local _, _, row, col = node:range()
+  return { row, col }
+end
+
+---@param buf integer
+---@param node TSNode
+---@return TemplatePair?
+template_pair_from_node = function(buf, node)
+  local filetype = vim.bo[buf].filetype
+  if filetype == "htmldjango" then
+    if node:type() ~= "paired_statement" and node:type() ~= "paired_comment" then
+      return nil
+    end
+    local first, last, open_end, close_start ---@type TSNode?, TSNode?, TSNode?, TSNode?
+    if node:type() == "paired_comment" then
+      local previous ---@type TSNode?
+      for child in node:iter_children() do
+        if previous == first and not open_end then open_end = child end
+        if child:type() == "comment" then first = child end
+        if child:type() == "endcomment" then
+          last = child
+          close_start = previous
+        end
+        previous = child
+      end
+    else
+      for child in node:iter_children() do
+        if child:type() == "tag_name" then
+          if not first then first = child else last = child end
+        elseif child:type() == "%}" and not open_end then
+          open_end = child
+        elseif child:type() == "{%" then
+          close_start = child
+        end
+      end
+    end
+    if not first or not last then return nil end
+    local opening_name = vim.treesitter.get_node_text(first, buf)
+    local closing_name = vim.treesitter.get_node_text(last, buf)
+    if closing_name ~= "end" .. opening_name
+      or not django_blocks[opening_name] then return nil end
+    local first_row, first_col, _, first_end_col = first:range()
+    local last_row, last_col, _, last_end_col = last:range()
+    local first_name = { row = first_row, first = first_col,
+      last = first_end_col, text = opening_name }
+    local last_name = { row = last_row, first = last_col,
+      last = last_end_col, text = closing_name }
+    if not open_end or not close_start then return nil end
+    return { opening = first_name, closing = last_name,
+      open_start = node_start(node), open_end = node_end(open_end),
+      close_start = node_start(close_start), close_end = node_end(node) }
+  end
+  local names = jinja_blocks[node:type()]
+  if not names then return nil end
+  local opening, closing ---@type TagName?, TagName?
+  for child in node:iter_children() do
+    if child:type() == names[1] .. "_statement"
+      or node:type() == "set_block" and child:type() == "set_block_statement"
+      or child:type() == "raw_start" then
+      opening = template_keyword(buf, child, names[1])
+    elseif child:type() == names[2] .. "_statement"
+      or child:type() == "raw_end" then
+      closing = template_keyword(buf, child, names[2])
+    end
+  end
+  if not opening or not closing then return nil end
+  local first_end, last_start ---@type TSNode?, TSNode?
+  if node:type() == "raw_block" then
+    for child in node:iter_children() do
+      if child:type() == "raw_start" then first_end = child end
+      if child:type() == "raw_end" and not child:missing() then
+        last_start = child
+      end
+    end
+    if not first_end or not last_start then return nil end
+    return { opening = opening, closing = closing,
+      open_start = node_start(first_end), open_end = node_end(first_end),
+      close_start = node_start(last_start), close_end = node_end(last_start) }
+  end
+  for child in node:iter_children() do
+    if child:type() == "%}" or child:type() == "-%}" then
+      if not first_end then first_end = child end
+    elseif child:type() == "{%" or child:type() == "{%-" then
+      last_start = child
+    end
+  end
+  if not first_end or not last_start then return nil end
+  return { opening = opening, closing = closing,
+    open_start = node_start(node), open_end = node_end(first_end),
+    close_start = node_start(last_start), close_end = node_end(node) }
+end
+
+---@param row integer
+---@param col integer
+---@param start integer[]
+---@param finish integer[]
+---@return boolean
+local function within_range(row, col, start, finish)
+  return (row > start[1] or row == start[1] and col >= start[2])
+    and (row < finish[1] or row == finish[1] and col < finish[2])
+end
+
+---@param buf integer
+---@param row integer
+---@param col integer
+---@return TemplatePair?
+local function template_pair_at(buf, row, col)
+  if not template_filetype[vim.bo[buf].filetype] then return nil end
+  local node = vim.treesitter.get_node({ bufnr = buf, pos = { row, col },
+    ignore_injections = true })
+  while node do
+    local pair = template_pair_from_node(buf, node)
+    if pair and (within_range(row, col, pair.open_start, pair.open_end)
+      or within_range(row, col, pair.close_start, pair.close_end)) then
+      return pair
+    end
+    node = node:parent()
+  end
+end
+
+--- Detect a second statement delimiter without mistaking quoted text for one.
+---@param arguments string
+---@return boolean
+local function nested_template_delimiter(arguments)
+  local quote ---@type string?
+  local index = 1
+  while index < #arguments do
+    local char = arguments:sub(index, index)
+    local next_char = arguments:sub(index + 1, index + 1)
+    if quote then
+      if char == "\\" then
+        index = index + 1
+      elseif char == quote then
+        quote = nil
+      end
+    elseif char == '"' or char == "'" then
+      quote = char
+    elseif char == "{" and next_char == "%"
+      or char == "%" and next_char == "}" then
+      return true
+    end
+    index = index + 1
+  end
+  return false
+end
+
+---@param buf integer
+---@param row integer
+---@param col integer
+---@return string?, integer?, integer?, TemplatePair?
+local function template_opener_at(buf, row, col)
+  if col == 0 then return nil end
+  local filetype = vim.bo[buf].filetype
+  local node = vim.treesitter.get_node({ bufnr = buf,
+    pos = { row, col - 1 }, ignore_injections = true })
+  while node do
+    local pair = template_pair_from_node(buf, node)
+    if pair and pair.open_end[1] == row and pair.open_end[2] == col then
+      return pair.opening.text, pair.open_start[1],
+        pair.open_start[2], pair
+    end
+    local kind = node:type()
+    if kind == "ERROR" or kind == "raw_block" then
+      local first_row, first_col = node:range()
+      if row - first_row <= 128 then
+        local lines = vim.api.nvim_buf_get_text(buf, first_row, first_col,
+          row, col, {})
+        local statement = table.concat(lines, " ")
+        local name, arguments = statement:match(
+          "^{%%%-?%s*([%a_]+)(.-)%-?%%}$")
+        if name and (kind == "raw_block"
+          or not inside_template_raw(buf, row, col - 1)) then
+          local valid = filetype == "htmldjango" and django_blocks[name]
+          if not valid then
+            for _, names in pairs(jinja_blocks) do
+              if names[1] == name and filetype ~= "htmldjango" then
+                valid = true
+                break
+              end
+            end
+          end
+          if valid and not nested_template_delimiter(arguments)
+            and not ((name == "if" or name == "for"
+              or name == "block" or name == "macro" or name == "call"
+              or name == "filter" or name == "with" or name == "set"
+              or name == "autoescape") and not arguments:match("%S"))
+            and not (name == "set"
+              and arguments:match("^%s*[%a_][%w_]*%s*=")) then
+            return name, first_row, first_col, nil
+          end
+        end
+      end
+    end
+    node = node:parent()
+  end
+end
+
+---@param buf integer
+---@param row integer
+---@param col integer
+---@return nil
+local function close_template_block(buf, row, col)
+  local name, start_row, start_col, pair = template_opener_at(buf, row, col)
+  if not name then return end
+  local collection = pending_blocks[buf]
+  local record, index = pending_at(buf, start_row, start_col,
+    pending_blocks)
+  local inherited = false
+  if pair and record then
+    for _, mark in ipairs(record.ancestor_closers) do
+      local position = vim.api.nvim_buf_get_extmark_by_id(buf,
+        pending_namespace, mark, {})
+      if position[1] == pair.close_start[1]
+        and position[2] == pair.close_start[2] then
+        inherited = true
+        break
+      end
+    end
+  end
+  if record then
+    table.remove(collection, index)
+    release_pending(buf, record)
+  end
+  if pair and not inherited then return end
+  changing[buf] = true
+  vim.api.nvim_buf_set_text(buf, row, col, row, col,
+    { "{% end" .. name .. " %}" })
+  changing[buf] = nil
 end
 
 --- Parser recovery can expose a new tag inside an unfinished XML instruction.
@@ -658,11 +1064,9 @@ local function lexical_mate_at(buf, tag_row, tag_col,
   local stack = {} ---@type TagName[]
   local found = false
   local mate ---@type TagName?
-  local html_syntax = vim.bo[buf].filetype == "html"
-    or vim.bo[buf].filetype == "htmldjango"
-    or vim.bo[buf].filetype == "markdown"
+  local is_html = html_syntax[vim.bo[buf].filetype] == true
   local function implied_by_start(name)
-    if not html_syntax then return end
+    if not is_html then return end
     local top = stack[#stack]
     while top and optional_on_open[top.text:lower()]
       and optional_on_open[top.text:lower()][name.text:lower()] do
@@ -671,7 +1075,7 @@ local function lexical_mate_at(buf, tag_row, tag_col,
     end
   end
   local function implied_by_end(name)
-    if not html_syntax then return end
+    if not is_html then return end
     local top = stack[#stack]
     -- In a closing-side rename, the last opener may be the explicit mate
     -- currently being renamed; only descendants can end implicitly.
@@ -731,7 +1135,7 @@ end
 ---@return boolean
 local function same_name(buf, left, right)
   local filetype = vim.bo[buf].filetype
-  if filetype == "html" or filetype == "htmldjango" or filetype == "markdown" then
+  if html_syntax[filetype] then
     return left:lower() == right:lower()
   end
   return left == right
@@ -819,23 +1223,31 @@ function M.refresh_highlight(event)
     M.clear_highlight({ buf = buf })
     return
   end
-  local tag = tag_at(buf, row, col)
-  if not tag or inside_html_text_ancestor(buf, tag)
-    or inside_markdown_code(buf, row, col) then
-    M.clear_highlight({ buf = buf })
-    return
-  end
-  local opener, closer = element_tags(tag)
-  if not opener or not closer or not completed_tag(opener)
-    or not completed_tag(closer) then
-    M.clear_highlight({ buf = buf })
-    return
-  end
-  local first = tag_name(buf, opener, false)
-  local last = tag_name(buf, closer, true)
-  if not first or not last or not same_name(buf, first.text, last.text) then
-    M.clear_highlight({ buf = buf })
-    return
+  local template_pair = template_pair_at(buf, row, col)
+  local first, last ---@type TagName?, TagName?
+  if template_pair then
+    first, last = template_pair.opening, template_pair.closing
+  else
+    local tag = tag_at(buf, row, col)
+    if not tag or inside_html_text_ancestor(buf, tag)
+      or inside_markdown_code(buf, row, col)
+      or inside_template_raw(buf, row, col) then
+      M.clear_highlight({ buf = buf })
+      return
+    end
+    local opener, closer = element_tags(tag)
+    if not opener or not closer or not completed_tag(opener)
+      or not completed_tag(closer)
+      or not same_template_branch(buf, opener, closer) then
+      M.clear_highlight({ buf = buf })
+      return
+    end
+    first = tag_name(buf, opener, false)
+    last = tag_name(buf, closer, true)
+    if not first or not last or not same_name(buf, first.text, last.text) then
+      M.clear_highlight({ buf = buf })
+      return
+    end
   end
   local positions = { first.row, first.first, first.last,
     last.row, last.first, last.last }
@@ -974,15 +1386,18 @@ end
 ---@param mark integer
 ---@param is_closing boolean
 ---@return TagName?
-local function marked_name(buf, mark, is_closing)
+local function marked_name(buf, mark, is_closing, kind)
   local position = vim.api.nvim_buf_get_extmark_by_id(buf, tracked_namespace,
     mark, {})
   if #position == 0 then return nil end
   local row, col = unpack(position)
   local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
-  local prefix = is_closing and "</%s*$" or "<%s*$"
+  local prefix = kind == "template" and "{%%%-?%s*$"
+    or is_closing and "</%s*$" or "<%s*$"
   if not line:sub(1, col):match(prefix) then return nil end
-  local text = line:sub(col + 1):match("^" .. tag_identifier)
+  local text = kind == "template"
+    and line:sub(col + 1):match("^([%a_]+)")
+    or line:sub(col + 1):match("^" .. tag_identifier)
   if not text then return nil end
   return { row = row, first = col, last = col + #text, text = text }
 end
@@ -997,16 +1412,18 @@ function M.capture_pair(event)
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   row = row - 1
   local pair = tracked[buf]
-  local current = pair and marked_name(buf, pair.source, pair.source_closing)
-  if current and current.row == row and col >= current.first
-    and col <= current.last then return end
-  if pair and not current then
+  local current = pair and marked_name(buf, pair.source,
+    pair.source_closing, pair.kind)
+  if current and pair.fast_valid and current.row == row
+    and col >= current.first and col <= current.last then return end
+  if pair and pair.fast_valid and not current then
     local position = vim.api.nvim_buf_get_extmark_by_id(buf,
       tracked_namespace, pair.source, {})
     if position[1] == row and col >= position[2] - 1
       and col <= position[2] then
       local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
-      local prefix = pair.source_closing and "</%s*$" or "<%s*$"
+      local prefix = pair.kind == "template" and "{%%%-?%s*$"
+        or pair.source_closing and "</%s*$" or "<%s*$"
       local next_char = line:sub(position[2] + 1, position[2] + 1)
       if line:sub(1, position[2]):match(prefix)
         and (next_char == "" or next_char:match("[%s>]") ~= nil) then
@@ -1016,6 +1433,39 @@ function M.capture_pair(event)
   end
   release_tracked(buf)
   local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+  if template_filetype[vim.bo[buf].filetype] then
+    local available, parser = pcall(vim.treesitter.get_parser, buf)
+    if available and parser and pcall(function()
+      parser:parse({ row, 0, row, col + 1 })
+    end) then
+      local template = template_pair_at(buf, row, col)
+      if template then
+        local source = template.opening
+        local mate = template.closing
+        local source_closing = false
+        if row == mate.row and col >= mate.first and col <= mate.last then
+          source, mate, source_closing = mate, source, true
+        end
+        if row == source.row and col >= source.first
+          and col <= source.last then
+          tracked[buf] = {
+            source = vim.api.nvim_buf_set_extmark(buf, tracked_namespace,
+              source.row, source.first, { right_gravity = false }),
+            mate = vim.api.nvim_buf_set_extmark(buf, tracked_namespace,
+              mate.row, mate.first, { right_gravity = false }),
+            source_closing = source_closing,
+            mate_closing = not source_closing,
+            source_row = source.row,
+            source_first = source.first,
+            source_last = source.last,
+            fast_valid = observe_tracked_edits(buf),
+            kind = "template",
+          }
+          return
+        end
+      end
+    end
+  end
   if not line:sub(col + 1, col + 1):match("[%w:._$%-\128-\255]")
     and not line:sub(col, col):match("[%w:._$%-\128-\255]") then
     return
@@ -1032,7 +1482,8 @@ function M.capture_pair(event)
   if inside_markdown_code(buf, row, col)
     or inside_vue_interpolation_string(buf, row, col)
     or inside_xml_processing_instruction(buf, row, col)
-    or inside_style_text(buf, row, col) then return end
+    or inside_style_text(buf, row, col)
+    or inside_template_raw(buf, row, col) then return end
   local tag = tag_at(buf, row, col)
   local is_closing = true
   local source ---@type TagName?
@@ -1043,6 +1494,8 @@ function M.capture_pair(event)
     source = tag_name(buf, tag, is_closing)
     if not source or col < source.first or col > source.last then return end
     local start_tag, end_tag = element_tags(tag)
+    if start_tag and end_tag
+      and not same_template_branch(buf, start_tag, end_tag) then return end
     local mate = is_closing and start_tag or end_tag
     mate_name = mate and tag_name(buf, mate, not is_closing)
     if mate_name and not same_name(buf, mate_name.text, source.text) then
@@ -1090,18 +1543,36 @@ end
 local function rename_tracked(buf, row, col)
   local pair = tracked[buf]
   if not pair then return false end
-  local source = marked_name(buf, pair.source, pair.source_closing)
+  local source = marked_name(buf, pair.source, pair.source_closing,
+    pair.kind)
   if not source or source.row ~= row or col < source.first
     or col > source.last then return false end
-  local mate = marked_name(buf, pair.mate, pair.mate_closing)
+  local mate = marked_name(buf, pair.mate, pair.mate_closing, pair.kind)
   if not mate then
     release_tracked(buf)
     return false
   end
-  if mate.text ~= source.text then
+  local wanted = source.text
+  if pair.kind == "template" then
+    local opener = pair.source_closing and source.text:match("^end([%a_]+)$")
+      or source.text
+    local allowed = vim.bo[buf].filetype == "htmldjango"
+      and django_blocks[opener]
+    if not allowed then
+      for _, names in pairs(jinja_blocks) do
+        if names[1] == opener and vim.bo[buf].filetype ~= "htmldjango" then
+          allowed = true
+          break
+        end
+      end
+    end
+    if not allowed then return false end
+    wanted = pair.source_closing and opener or "end" .. opener
+  end
+  if mate.text ~= wanted then
     changing[buf] = true
     vim.api.nvim_buf_set_text(buf, mate.row, mate.first,
-      mate.row, mate.last, { source.text })
+      mate.row, mate.last, { wanted })
     changing[buf] = nil
   end
   return true
@@ -1233,6 +1704,10 @@ local function rename(buf, row, col)
       local source = tag_name(buf, tag, closing[tag:type()] == true)
       if source and source.row == row and col >= source.first and col <= source.last then
         local start_tag, end_tag = element_tags(tag)
+        if start_tag and end_tag
+          and not same_template_branch(buf, start_tag, end_tag) then
+          return false
+        end
         local direct = tag == start_tag and end_tag or tag == end_tag and start_tag
         local direct_name = direct and tag_name(buf, direct, closing[direct:type()] == true)
         if direct_name and direct_name.text == source.text then return true end
@@ -1274,8 +1749,13 @@ local function close_tag(buf, row, col)
   if self_closing_tag(tag_text, name.text) then return end
   if is_void(buf, name.text) then return end
   local _, direct_closer = element_tags(tag)
+  local branch_closer = direct_closer
+    and not same_template_branch(buf, tag, direct_closer)
+  if branch_closer then
+    direct_closer = nil
+  end
   local existing = direct_closer and tag_name(buf, direct_closer, true)
-    or lexical_mate(buf, tag)
+    or not branch_closer and lexical_mate(buf, tag)
   local record, index = pending_for(buf, tag)
   local inherited = existing and record
     and belongs_to_ancestor(buf, record, existing)
@@ -1308,6 +1788,14 @@ function M.edit(buf, row, col, autoclose)
   local available, parser = pcall(vim.treesitter.get_parser, buf)
   if not available or not parser then return end
   local pair = tracked[buf]
+  if pair and pair.kind == "template" then
+    if not pair.fast_valid then
+      release_tracked(buf)
+      return
+    end
+    rename_tracked(buf, row, col)
+    return
+  end
   if pair and pair.fast_valid and rename_tracked(buf, row, col) then return end
   if not pair then
     local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
@@ -1324,6 +1812,7 @@ function M.edit(buf, row, col, autoclose)
   if inside_vue_interpolation_string(buf, row, math.max(0, col - 1)) then return end
   if inside_xml_processing_instruction(buf, row, math.max(0, col - 1)) then return end
   if inside_style_text(buf, row, math.max(0, col - 1)) then return end
+  if inside_template_raw(buf, row, math.max(0, col - 1)) then return end
   if pair and not pair.fast_valid
     and inside_literal(buf, row, math.max(0, col - 1)) then return end
   if rename_tracked(buf, row, col) then return end
@@ -1341,11 +1830,34 @@ function M.complete_current()
   M.edit(vim.api.nvim_get_current_buf(), row - 1, col, true)
 end
 
+--- Complete a template block after its final closing brace.
+---@return nil
+function M.complete_current_block()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= "" or not template_filetype[vim.bo[buf].filetype]
+    or streaming_paste[buf] then return end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local available, parser = pcall(vim.treesitter.get_parser, buf)
+  if not available or not parser or not pcall(function()
+    parser:parse({ row - 1, 0, row - 1, col + 1 })
+  end) then return end
+  close_template_block(buf, row - 1, col)
+end
+
 --- Insert `>` and synchronously complete markup tags in supported buffers.
 ---@return string
 function M.gt()
   if vim.bo.buftype ~= "" or not supported[vim.bo.filetype] then return ">" end
   return "><Cmd>lua require('paired_tags').complete_current()<CR>"
+end
+
+--- Insert a brace and complete a template opener in template buffers.
+---@return string
+function M.brace()
+  if vim.bo.buftype ~= "" or not template_filetype[vim.bo.filetype] then
+    return "}"
+  end
+  return "}<Cmd>lua require('paired_tags').complete_current_block()<CR>"
 end
 
 --- Find the opening tag ending at the cursor, ignoring quoted angle brackets.
@@ -1374,18 +1886,35 @@ local function opening_name_before_cursor(text)
   end
 end
 
---- Split adjacent matching HTML tags using effective buffer indentation.
+--- Split adjacent HTML tags or template blocks using buffer indentation.
 --- Other Enter presses retain native behavior.
 ---@return string
 function M.html_enter()
   local filetype = vim.bo.filetype
-  if (filetype ~= "html" and filetype ~= "htmldjango")
+  if (filetype ~= "html" and filetype ~= "htmldjango"
+    and filetype ~= "jinja" and filetype ~= "jinja2")
     or vim.bo.buftype ~= "" or vim.fn.pumvisible() == 1 then
     return "<CR>"
   end
 
   local line = vim.api.nvim_get_current_line()
   local column = vim.api.nvim_win_get_cursor(0)[2]
+  if template_filetype[filetype] and column > 0 then
+    local buf = vim.api.nvim_get_current_buf()
+    local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local available, parser = pcall(vim.treesitter.get_parser, buf)
+    if available and parser and pcall(function()
+      parser:parse({ row, 0, row, column + 1 })
+    end) then
+      local pair = template_pair_at(buf, row, column - 1)
+      if pair and pair.open_end[1] == row and pair.open_end[2] == column
+        and pair.close_start[1] == row and pair.close_start[2] == column then
+        local width = vim.fn.shiftwidth()
+        local levels = math.floor(vim.fn.indent(".") / width) + 1
+        return "<CR><CR><Up>" .. string.rep("<C-t>", levels)
+      end
+    end
+  end
   local opening = opening_name_before_cursor(line:sub(1, column))
   local closing = line:sub(column + 1):match("^</([%a][%w:_%-]*)%s*>")
   if opening and closing and opening:lower() == closing:lower() then
@@ -1436,6 +1965,7 @@ function M.setup(options)
     end
   end
   if configured then return end
+  vim.treesitter.language.register("jinja", "jinja2")
   if options.highlight then
     highlight_groups.opening = options.highlight.opening or highlight_groups.opening
     highlight_groups.closing = options.highlight.closing or highlight_groups.closing
@@ -1475,6 +2005,13 @@ function M.setup(options)
     callback = M.clear_pending, desc = "Clear pending markup tag positions" })
   vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, { group = group,
     callback = M.changed, desc = "Close and rename paired markup tags" })
+  vim.api.nvim_create_autocmd("InsertLeave", { group = group,
+    callback = function(event)
+      if tracked[event.buf] and tracked[event.buf].kind == "template" then
+        M.changed(event)
+      end
+    end,
+    desc = "Finish a template keyword rename after Insert input" })
   vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "TextChanged",
     "TextChangedI", "TextChangedP", "BufEnter", "WinEnter", "InsertEnter" }, {
     group = group, callback = M.refresh_highlight,
@@ -1486,6 +2023,8 @@ function M.setup(options)
   })
   vim.keymap.set("i", ">", M.gt,
     { expr = true, silent = true, desc = "Close a completed markup tag" })
+  vim.keymap.set("i", "}", M.brace,
+    { expr = true, silent = true, desc = "Close a completed template block" })
   vim.keymap.set("i", "<CR>", M.html_enter,
     { expr = true, silent = true, desc = "Indent between matching HTML tags" })
 end
