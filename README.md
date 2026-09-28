@@ -18,10 +18,10 @@ provides an Enter mapping between adjacent pairs.
 | Rename either name in `<section>...</section>` | Updates its matching name, including when the opening tag has attributes or spans lines. |
 | Place the cursor on either tag in `<section>...</section>` | Highlights both tag names. |
 | Press Enter at `<section>\|</section>` in HTML | Opens an indented content line and keeps the closing tag at the opener's indent. |
-| Type `{% if active %}` in a Django or Jinja HTML template | Inserts `{% endif %}` at the cursor. |
+| Type `{%if active%}` in a Django or Jinja HTML template | Produces `{% if active %}{% endif %}`. |
 | Rename either keyword in `{% if %}...{% endif %}` | Updates its matching block keyword. |
 | Place the cursor on `{% else %}` | Highlights `else` and the `if` or `for` that owns it. |
-| Type `{%`, `{{`, or `{#` in a template | Inserts `%}`, `}}`, or `#}` and keeps the cursor inside. |
+| Type `{%`, `{{`, or `{#` in a template | Produces `{%  %}`, `{{  }}`, or `{#  #}` with the cursor between the spaces. |
 
 The plugin supports `html`, `htmldjango`, `jinja`, `jinja2`, `xml`,
 `javascriptreact`, `typescriptreact`, `vue`, `svelte`, and HTML embedded in
@@ -93,9 +93,12 @@ owning opener: Django `elif`/`else`, `for`/`empty`, `ifchanged`/`else`, and
 branches highlight their nearest owner. Renaming remains limited to the
 opening and closing block keywords.
 
-Typing `{%`, `{{`, or `{#` inserts the matching delimiter and keeps the cursor
-inside. Typing its generated closing characters moves through them. An
-existing closer at the insertion point is preserved. Expression and comment
+Typing `{%`, `{{`, or `{#` inserts the matching delimiter with one space on
+each side of the cursor; type the content without adding those spaces. Typing
+the generated closing characters advances through them. An existing closer
+at the insertion point is preserved. If
+`nvim-autopairs` has already inserted a `}`, the plugin replaces that brace
+instead of leaving an extra one. Expression and comment
 delimiters do not create block statements. Template delimiters typed inside
 strings, comments, and raw or verbatim bodies remain literal.
 
@@ -138,12 +141,14 @@ call:
 require("paired_tags").setup()
 ```
 
-`setup()` installs Insert-mode `>`, `{`, `%`, `#`, `}`, and `<CR>` mappings,
+`setup()` installs Insert-mode `>`, `{`, `%`, `#`, `-`, `}`, and `<CR>` mappings,
 text-change and cursor callbacks, and a paste wrapper used to distinguish
 streamed paste from typing.
 Calling it again in the same session is harmless. If another plugin also maps
 `<CR>`, configure that plugin not to replace this mapping; for example,
-`nvim-autopairs` can use `map_cr = false`.
+`nvim-autopairs` can use `map_cr = false`. The `{` and `}` mappings work with
+`nvim-autopairs` loaded before or after this plugin; ordinary brace pairing
+continues through its original mappings.
 
 By default, the two highlight groups are `PairedTagsOpening` and
 `PairedTagsClosing`; both link to `MatchParen` unless your colorscheme defines
@@ -171,8 +176,8 @@ document, or add general punctuation pairing for quotes and brackets.
 ## Verification
 
 The repository includes standalone tests for setup, highlighting and its
-configuration, HTML Enter, paired editing, 56 language scenarios, and four
-bug-regression suites (51, 35, 62, and 188 cases), plus Django and Jinja
+configuration, HTML Enter, paired editing, 56 language scenarios, and three
+bug-report suites (35, 62, and 188 cases), plus Django and Jinja
 template editing. Run from the repository
 root with an installed set of the parsers listed above. `tests/bootstrap.lua`
 uses the parsers in Neovim's standard data directory; set
@@ -199,12 +204,31 @@ Replace the test path with `template_html_spec.lua`,
 `template_blocks_spec.lua`, `template_branches_spec.lua`,
 `template_delimiters_spec.lua`, `html_enter_spec.lua`,
 `highlight_spec.lua`, `paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
-`tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
+`tag_scenarios_spec.lua`,
 `tag_bug_report_2_spec.lua`, or
 `tag_bug_report_3_spec.lua` to run the other suites. Synchronous tests need
 the `pcall`/`cquit` wrapper shown above; regression runners exit on their own.
 The highlight configuration suite runs without `tests/bootstrap.lua` so it
 can call `setup()` with custom options before defaults are registered.
+To run the delimiter integration suite in both load orders, replace the path
+below with an installed `nvim-autopairs` checkout:
+
+```sh
+PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs \
+  nvim --headless -u NONE -i NONE -n \
+  '+luafile tests/bootstrap.lua' \
+  '+lua local ok, err = pcall(dofile, "tests/template_delimiter_autopairs_spec.lua"); if not ok then print(err); vim.cmd("cquit") end' \
+  +qa!
+
+PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs \
+  nvim --headless -u NONE -i NONE -n \
+  '+lua vim.opt.rtp:append(vim.env.PAIRED_TAGS_AUTOPAIRS_RTP); require("nvim-autopairs").setup({ map_cr = false })' \
+  '+luafile tests/bootstrap.lua' \
+  '+lua local ok, err = pcall(dofile, "tests/template_delimiter_autopairs_spec.lua"); if not ok then print(err); vim.cmd("cquit") end' \
+  +qa!
+```
+
+The integration suite was run with `nvim-autopairs` 0.10.0 at `23320e7`.
 The contract and acceptance criteria are in [SPECS.md](SPECS.md).
 
 ## License

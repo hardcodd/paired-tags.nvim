@@ -1984,6 +1984,23 @@ local function can_open_delimiter()
   end) then return false end
   local state = template_context_before(buf, row - 1, col - 1)
   if state then return false end
+  local template_node = vim.treesitter.get_node({ bufnr = buf,
+    pos = { row - 1, col - 1 }, ignore_injections = true })
+  while template_node do
+    local kind = template_node:type()
+    if kind == "raw_block" or kind == "raw_body"
+      or kind == "paired_comment" then return false end
+    if (kind == "paired_statement" or kind == "ERROR")
+      and vim.bo[buf].filetype == "htmldjango" then
+      for child in template_node:iter_children() do
+        if child:type() == "tag_name"
+          and vim.treesitter.get_node_text(child, buf) == "verbatim" then
+          return false
+        end
+      end
+    end
+    template_node = template_node:parent()
+  end
   local node = vim.treesitter.get_node({ bufnr = buf,
     pos = { row - 1, col - 1 }, ignore_injections = false })
   while node do
@@ -1993,14 +2010,6 @@ local function can_open_delimiter()
       or kind == "CData" or kind == "PI" or kind == "EntityValue"
       or kind == "paired_comment" or kind == "raw_block"
       or kind == "raw_body" then return false end
-    if kind == "paired_statement" and vim.bo[buf].filetype == "htmldjango" then
-      for child in node:iter_children() do
-        if child:type() == "tag_name"
-          and vim.treesitter.get_node_text(child, buf) == "verbatim" then
-          return false
-        end
-      end
-    end
     if kind == "unpaired_comment" or kind == "comment" then
       local start_row, start_col = node:range()
       if start_row ~= row - 1 or start_col ~= col - 1 then return false end
@@ -2010,9 +2019,40 @@ local function can_open_delimiter()
   return true
 end
 
+--- Preserve template completion ahead of nvim-autopairs' local brace maps.
+--- The original callbacks still handle ordinary braces in the same buffer.
+---@return nil
+function M.attach_autopairs_braces()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= "" or not template_filetype[vim.bo[buf].filetype]
+    then return end
+  for _, character in ipairs({ "{", "}" }) do
+    local mapping = vim.fn.maparg(character, "i", false, true)
+    if mapping.buffer == 1 and mapping.desc == "autopairs map key"
+      and type(mapping.callback) == "function" then
+      local original = mapping.callback
+      vim.keymap.set("i", character, function()
+        if character == "{" and can_open_delimiter() then
+          return vim.api.nvim_replace_termcodes(M.open_brace(), true,
+            false, true)
+        elseif character == "}" then
+          local result = M.brace()
+          if result ~= "}" then
+            return vim.api.nvim_replace_termcodes(result, true, false, true)
+          end
+        end
+        return original()
+      end, { buffer = buf, expr = true, silent = mapping.silent == 1,
+        replace_keycodes = false,
+        desc = "Complete template delimiters with paired-tags" })
+    end
+  end
+end
+
 --- Advance over a generated closer character only while its text is intact.
 ---@param character string
 ---@return string? closer
+---@return boolean? skipped_space
 local function skip_generated_delimiter(character)
   local buf = vim.api.nvim_get_current_buf()
   if vim.bo[buf].buftype ~= ""
@@ -2045,8 +2085,12 @@ local function skip_generated_delimiter(character)
       table.remove(records, index)
     elseif position[1] == row - 1 then
       local offset = col - position[2] + 1
+      local before_space = offset == 0
+        and line:sub(col + 1, col + 1) == " "
+      if before_space then offset = 1 end
       if record.closer:sub(offset, offset) == character
-        and line:sub(col + 1, col + 1) == character then
+        and line:sub(col + (before_space and 2 or 1),
+          col + (before_space and 2 or 1)) == character then
         local state, quote, depth = template_context_before(buf, row - 1, col,
           opening[1], opening[2])
         local expected = record.closer == "%}" and "statement"
@@ -2054,19 +2098,19 @@ local function skip_generated_delimiter(character)
         if state ~= expected or quote or expected == "expression" and depth > 0 then
           return nil
         end
-        if offset == #record.closer then
+        if offset == #record.closer and not before_space then
           vim.api.nvim_buf_del_extmark(buf, delimiter_namespace, record.id)
           vim.api.nvim_buf_del_extmark(buf, delimiter_namespace, record.opening)
           table.remove(records, index)
         end
-        return record.closer
+        return record.closer, before_space
       end
     end
   end
   return nil
 end
 
---- Complete one of the three template delimiter pairs at the cursor.
+--- Complete a template pair with spaces, reusing a closer or paired brace.
 ---@param character "%"|"{"|"#"
 ---@return nil
 function M.complete_current_delimiter(character)
@@ -2076,15 +2120,21 @@ function M.complete_current_delimiter(character)
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
   if col < 2 or line:sub(col - 1, col) ~= "{" .. character then return end
-  if line:sub(col + 1, col + #closer) ~= closer then
-    changing[buf] = true
-    vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { closer })
-    changing[buf] = nil
-  end
+  local existing = line:sub(col + 1, col + #closer) == closer
+  local paired_brace = not existing and line:sub(col + 1, col + 1) == "}"
+  local following_closer = paired_brace
+    and line:sub(col + 2, col + 1 + #closer) == closer
+  local replacement_end = paired_brace and col + 1 or col
+  local replacement = (existing or following_closer) and "  "
+    or "  " .. closer
+  changing[buf] = true
+  vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1,
+    replacement_end, { replacement })
+  changing[buf] = nil
   local opening = vim.api.nvim_buf_set_extmark(buf, delimiter_namespace,
     row - 1, col - 2, { right_gravity = false })
   local id = vim.api.nvim_buf_set_extmark(buf, delimiter_namespace,
-    row - 1, col, { right_gravity = true })
+    row - 1, col + 2, { right_gravity = true })
   generated_delimiters[buf] = generated_delimiters[buf] or {}
   table.insert(generated_delimiters[buf],
     { id = id, opening = opening, closer = closer })
@@ -2101,7 +2151,7 @@ end
 ---@return string
 function M.open_brace()
   if can_open_delimiter() then
-    return "{<Cmd>lua require('paired_tags').complete_current_delimiter('{')<CR>"
+    return "{<Cmd>lua require('paired_tags').complete_current_delimiter('{')<CR><Right>"
   end
   return "{"
 end
@@ -2109,9 +2159,10 @@ end
 --- Insert `%`, pair `{% ... %}`, or advance over its generated closer.
 ---@return string
 function M.percent()
-  if skip_generated_delimiter("%") then return "<Right>" end
+  local skipped, space = skip_generated_delimiter("%")
+  if skipped then return space and "<Right><Right>" or "<Right>" end
   if can_open_delimiter() then
-    return "%<Cmd>lua require('paired_tags').complete_current_delimiter('%')<CR>"
+    return "%<Cmd>lua require('paired_tags').complete_current_delimiter('%')<CR><Right>"
   end
   return "%"
 end
@@ -2119,22 +2170,56 @@ end
 --- Insert `#`, pair `{# ... #}`, or advance over its generated closer.
 ---@return string
 function M.hash()
-  if skip_generated_delimiter("#") then return "<Right>" end
+  local skipped, space = skip_generated_delimiter("#")
+  if skipped then return space and "<Right><Right>" or "<Right>" end
   if can_open_delimiter() then
-    return "#<Cmd>lua require('paired_tags').complete_current_delimiter('#')<CR>"
+    return "#<Cmd>lua require('paired_tags').complete_current_delimiter('#')<CR><Right>"
   end
   return "#"
+end
+
+--- Keep Jinja whitespace-control hyphens adjacent to generated delimiters.
+---@return string
+function M.hyphen()
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= "" or not template_filetype[vim.bo[buf].filetype]
+    or vim.bo[buf].filetype == "htmldjango" then return "-" end
+  local records = generated_delimiters[buf]
+  if not records then return "-" end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+  for _, record in ipairs(records) do
+    if record.closer == "%}" then
+      local opening = vim.api.nvim_buf_get_extmark_by_id(buf,
+        delimiter_namespace, record.opening, {})
+      local closer = vim.api.nvim_buf_get_extmark_by_id(buf,
+        delimiter_namespace, record.id, {})
+      if #opening == 2 and #closer == 2
+        and opening[1] == row - 1 and closer[1] == row - 1
+        and closer[2] == col + 1
+        and line:sub(col + 1, col + 1) == " "
+        and line:sub(col + 2, col + 3) == "%}" then
+        if col == opening[2] + 3
+          and line:sub(opening[2] + 1, col) == "{% " then
+          return "<Left>-<Right>"
+        end
+        return "<Right>-"
+      end
+    end
+  end
+  return "-"
 end
 
 --- Insert a brace and complete a template opener in template buffers.
 ---@return string
 function M.brace()
-  local skipped = skip_generated_delimiter("}")
+  local skipped, space = skip_generated_delimiter("}")
   if skipped then
     if skipped == "%}" then
-      return "<Right><Cmd>lua require('paired_tags').complete_current_block()<CR>"
+      return (space and "<Right><Right>" or "<Right>")
+        .. "<Cmd>lua require('paired_tags').complete_current_block()<CR>"
     end
-    return "<Right>"
+    return space and "<Right><Right>" or "<Right>"
   end
   if vim.bo.buftype ~= "" or not template_filetype[vim.bo.filetype] then
     return "}"
@@ -2290,6 +2375,13 @@ function M.setup(options)
     callback = clear_streaming_paste, desc = "Clear streamed paste state" })
   vim.api.nvim_create_autocmd("InsertCharPre", { group = group,
     callback = M.before_char, desc = "Track ancestors before a new markup tag" })
+  vim.api.nvim_create_autocmd("InsertCharPre", { group = group,
+    callback = function()
+      if vim.v.char == "{" then M.attach_autopairs_braces() end
+    end, desc = "Retain template expression completion with nvim-autopairs" })
+  vim.api.nvim_create_autocmd("InsertEnter", { group = group,
+    callback = M.attach_autopairs_braces,
+    desc = "Retain template expression completion with nvim-autopairs" })
   vim.api.nvim_create_autocmd({ "InsertLeave", "BufWipeout" }, { group = group,
     callback = M.clear_pending, desc = "Clear pending markup tag positions" })
   vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, { group = group,
@@ -2318,6 +2410,8 @@ function M.setup(options)
     { expr = true, silent = true, desc = "Close a template statement delimiter" })
   vim.keymap.set("i", "#", M.hash,
     { expr = true, silent = true, desc = "Close a template comment delimiter" })
+  vim.keymap.set("i", "-", M.hyphen,
+    { expr = true, silent = true, desc = "Keep Jinja whitespace-control delimiters" })
   vim.keymap.set("i", "}", M.brace,
     { expr = true, silent = true, desc = "Close a completed template block" })
   vim.keymap.set("i", "<CR>", M.html_enter,

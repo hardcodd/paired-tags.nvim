@@ -70,14 +70,18 @@ plugin. PHP is out of scope for this release.
   `elif`/`else` in `if` and `else` in `for`. Resolve nested branches to their nearest owning
   block. Do not change block renaming or highlight a malformed or unrelated
   branch.
-- In template filetypes, typing `{%`, `{{`, or `{#` inserts the matching `%}`,
-  `}}`, or `#}` immediately and leaves the cursor inside. Preserve a closer
-  already at the cursor. Typing a generated closer advances through it rather
-  than duplicating its characters. Completion of a `{% ... %}` statement
-  still inserts its matching `end...` block where applicable. Literal,
-  raw/verbatim, special-buffer, unsupported-filetype, and parser-unavailable
-  input retains native behavior. Nested template constructs must not consume
-  each other's generated closers.
+- In template filetypes, typing `{%`, `{{`, or `{#` produces `{%  %}`,
+  `{{  }}`, or `{#  #}` immediately, with the cursor between the two spaces.
+  Reuse an existing closer, including a single `}` inserted by a brace-pairing
+  plugin, without leaving an extra brace or duplicating the closer. The result
+  must be the same with `nvim-autopairs` enabled before or after this plugin.
+  Typing a generated closer advances through it rather than duplicating its
+  characters. Completion of a `{% ... %}` statement still inserts its matching
+  `end...` block where applicable. Direct typing of Jinja `{%- ... -%}`
+  remains possible despite the generated spaces. Literal, raw/verbatim,
+  special-buffer, unsupported-filetype, and parser-unavailable input retains
+  native behavior.
+  Nested template constructs must not consume each other's generated closers.
 - Enter between adjacent matching block delimiters creates one content line
   at the effective buffer indent and places the closer at the opener's
   indent. Mismatched, incomplete, or nonadjacent delimiters retain native

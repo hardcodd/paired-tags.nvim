@@ -68,20 +68,20 @@ local function marks(filetype, source, needle, expected, label)
 end
 
 for _, filetype in ipairs({ "htmldjango", "jinja", "jinja2" }) do
-  typed(filetype, "", 0, "{% if active %}",
+  typed(filetype, "", 0, "{%if active%}",
     "{% if active %}{% endif %}", filetype .. " closes if")
   typed(filetype, "{% if outer %}{% endif %}", #"{% if outer %}",
-    "{% if inner %}",
+    "{%if inner%}",
     "{% if outer %}{% if inner %}{% endif %}{% endif %}",
     filetype .. " preserves outer if closer")
   typed(filetype, "{% if active %}{% endif %}", 0,
     "", "{% if active %}{% endif %}",
     filetype .. " does not duplicate an existing closer")
-  typed(filetype, "{% endif %}", 0, "{% if active %}",
+  typed(filetype, "{% endif %}", 0, "{%if active%}",
     "{% if active %}{% endif %}",
     filetype .. " reuses a matching closer")
   typed(filetype, "{% if outer %}{% else %}{% endif %}",
-    #"{% if outer %}", "{% if inner %}",
+    #"{% if outer %}", "{%if inner%}",
     "{% if outer %}{% if inner %}{% endif %}{% else %}{% endif %}",
     filetype .. " preserves a closer across branches")
   typed(filetype, "{{ \"\" }}", #"{{ \"", "{% if active %}",
@@ -151,16 +151,16 @@ typed("jinja", "{% raw %} {% endraw %}",
 typed("jinja", "{#  #}", #"{# ", "{% if active %}",
   "{# {% if active %} #}",
   "Jinja comment keeps a statement literal")
-typed("htmldjango", "", 0, "{% if %}", "{% if %}",
+typed("htmldjango", "", 0, "{%if%}", "{% if %}",
   "Django incomplete if is not closed")
-typed("jinja", "", 0, "{% if %}", "{% if %}",
+typed("jinja", "", 0, "{%if%}", "{% if %}",
   "Jinja incomplete if is not closed")
-typed("jinja", "", 0, '{% if text == "{% hi %}" %}',
+typed("jinja", "", 0, '{%if text == "{% hi %}"%}',
   '{% if text == "{% hi %}" %}{% endif %}',
   "Jinja quoted delimiters in a condition remain literal")
-typed("jinja", "", 0, "{{ value }}", "{{ value }}",
+typed("jinja", "", 0, "{{value}}", "{{ value }}",
   "Jinja expressions remain unchanged")
-typed("htmldjango", "", 0, "{# note #}", "{# note #}",
+typed("htmldjango", "", 0, "{#note#}", "{# note #}",
   "Django comment delimiters remain unchanged")
 
 rename_keys("htmldjango", "{% if active %}x{% endif %}",
@@ -205,17 +205,19 @@ for _, case in ipairs({
   { "jinja", "{% set content %}", "{% endset %}" },
   { "jinja", "{%- if active -%}", "{% endif %}" },
 }) do
-  typed(case[1], "", 0, case[2], case[2] .. case[3],
+  local input = case[2]:gsub("^{%% ", "{%%"):gsub(" %%}$", "%%}")
+  if case[2]:sub(1, 3) == "{%-" then input = "{%-if active-%}" end
+  typed(case[1], "", 0, input, case[2] .. case[3],
     case[1] .. " closes " .. case[2])
 end
 
-typed("jinja", "", 0, "{% set value = 1 %}",
+typed("jinja", "", 0, "{%set value = 1%}",
   "{% set value = 1 %}", "Jinja assignment is not a paired block")
-typed("jinja", "", 0, "{% include 'card.html' %}",
+typed("jinja", "", 0, "{%include 'card.html'%}",
   "{% include 'card.html' %}", "Jinja include is not a paired block")
-typed("htmldjango", "", 0, "{% include 'card.html' %}",
+typed("htmldjango", "", 0, "{%include 'card.html'%}",
   "{% include 'card.html' %}", "Django include is not a paired block")
-typed("htmldjango", "", 0, "{% customtag value %}",
+typed("htmldjango", "", 0, "{%customtag value%}",
   "{% customtag value %}", "Unknown Django tags stay unchanged")
 typed("html", "", 0, "}", "}",
   "The brace mapping leaves ordinary HTML input alone")

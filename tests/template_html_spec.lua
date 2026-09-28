@@ -66,7 +66,7 @@ for _, filetype in ipairs({ "htmldjango", "jinja", "jinja2" }) do
   type_at(filetype, "{% if active %}{% endif %}", #"{% if active %}",
     "<strong>", "{% if active %}<strong></strong>{% endif %}",
     filetype .. " closes an HTML tag inside a template block")
-  type_at(filetype, "", 0, '<div class="{{ style }}">',
+  type_at(filetype, "", 0, '<div class="{{style}}">',
     '<div class="{{ style }}"></div>',
     filetype .. " preserves an interpolated attribute")
   type_at(filetype, "<main></main>", #"<main>", "<main>",

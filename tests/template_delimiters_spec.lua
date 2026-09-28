@@ -38,49 +38,49 @@ for _, filetype in ipairs({ "htmldjango", "jinja", "jinja2" }) do
     { "{#", "#}" },
   }) do
     typed(filetype, "", { 1, 0 }, pair[1] .. "X",
-      { pair[1] .. "X" .. pair[2] },
+      { pair[1] .. " X " .. pair[2] },
       filetype .. " inserts the closer and leaves the cursor inside "
         .. pair[1])
     local completed = typed(filetype, "", { 1, 0 },
-      pair[1] .. " value " .. pair[2],
+      pair[1] .. "value" .. pair[2],
       { pair[1] .. " value " .. pair[2] },
       filetype .. " typed closer must advance through " .. pair[2])
     assert(#api.nvim_buf_get_extmarks(completed, delimiter_ns, 0, -1, {}) == 0,
       filetype .. " completed delimiter must release its tracking marks")
     typed(filetype, pair[2], { 1, 0 }, pair[1],
-      { pair[1] .. pair[2] },
+      { pair[1] .. "  " .. pair[2] },
       filetype .. " existing closer must not duplicate " .. pair[2])
-    typed(filetype, pair[2], { 1, 0 }, pair[1] .. " value " .. pair[2],
+    typed(filetype, pair[2], { 1, 0 }, pair[1] .. "value" .. pair[2],
       { pair[1] .. " value " .. pair[2] },
       filetype .. " typed existing closer must not duplicate " .. pair[2])
   end
 
-  typed(filetype, "", { 1, 0 }, "{% if ready %}",
+  typed(filetype, "", { 1, 0 }, "{%if ready%}",
     { "{% if ready %}{% endif %}" },
     filetype .. " generated statement closer still completes its block")
   typed(filetype, "{% if outer %}{% endif %}",
-    { 1, #"{% if outer %}" }, "{% if inner %}",
+    { 1, #"{% if outer %}" }, "{%if inner%}",
     { "{% if outer %}{% if inner %}{% endif %}{% endif %}" },
     filetype .. " nested generated closer preserves outer block")
-  typed(filetype, "", { 1, 0 }, "{% if ready %}{{ value }}{# note #}",
+  typed(filetype, "", { 1, 0 }, "{%if ready%}{{value}}{#note#}",
     { "{% if ready %}{{ value }}{# note #}{% endif %}" },
     filetype .. " mixed nested delimiters keep their own closers")
-  typed(filetype, "", { 1, 0 }, "{{ {'a': {'b': 1}} }}",
+  typed(filetype, "", { 1, 0 }, "{{{'a': {'b': 1}}}}",
     { "{{ {'a': {'b': 1}} }}" },
     filetype .. " nested dictionary braces do not consume expression closer")
-  typed(filetype, "", { 1, 0 }, '{% if text == "{% hi %}" %}',
+  typed(filetype, "", { 1, 0 }, '{%if text == "{% hi %}"%}',
     { '{% if text == "{% hi %}" %}{% endif %}' },
     filetype .. " quoted statement delimiters do not consume the outer closer")
-  typed(filetype, "", { 1, 0 }, "{{ {'a': '}}', 'b': {'c': 2}} }}",
+  typed(filetype, "", { 1, 0 }, "{{{'a': '}}', 'b': {'c': 2}}}",
     { "{{ {'a': '}}', 'b': {'c': 2}} }}" },
     filetype .. " quoted expression closers and nested dictionaries stay literal")
-  typed(filetype, "", { 1, 0 }, "{# literal {{ value }} #}",
+  typed(filetype, "", { 1, 0 }, "{#literal {{ value }}#}",
     { "{# literal {{ value }} #}" },
     filetype .. " nested-looking delimiters in comments stay literal")
   typed(filetype, "", { 1, 0 }, "{{<CR>value<CR>}}",
-    { "{{", "value", "}}" },
+    { "{{ ", "value", "}}" },
     filetype .. " generated expression closer survives multiline content")
-  typed(filetype, "{% if\nready %}", { 1, 0 }, "{# note #}",
+  typed(filetype, "{% if\nready %}", { 1, 0 }, "{#note#}",
     { "{# note #}{% if", "ready %}" },
     filetype .. " delimiter insertion preserves multiline neighbors")
   typed(filetype, "{# note #}", { 1, #"{# " }, "{{ ignored }}",
@@ -106,12 +106,13 @@ for _, filetype in ipairs({ "htmldjango", "jinja" }) do
   local replacement = { "" }
   for _ = 1, 130 do replacement[#replacement + 1] = "value" end
   replacement[#replacement + 1] = ""
-  api.nvim_buf_set_text(long, 0, 2, 0, 2, replacement)
+  api.nvim_buf_set_text(long, 0, 3, 0, 3, replacement)
   local last_row = api.nvim_buf_line_count(long)
   api.nvim_win_set_cursor(0, { last_row, 0 })
   feed("i}}<Esc>")
-  assert(lines(long)[last_row] == "}}",
-    filetype .. " generated closer must survive more than 128 content lines")
+  assert(lines(long)[last_row] == " }}",
+    filetype .. " generated closer must survive more than 128 content lines: "
+      .. vim.inspect(lines(long)[last_row]))
 end
 
 local removed_opener = buffer("jinja", "")
@@ -119,16 +120,18 @@ feed("i{{<Esc>")
 api.nvim_buf_set_text(removed_opener, 0, 0, 0, 2, { "" })
 api.nvim_win_set_cursor(0, { 1, 0 })
 feed("i}<Esc>")
-assert(lines(removed_opener)[1] == "}}}",
-  "Deleting an opener must invalidate its generated closer marker")
+assert(lines(removed_opener)[1] == "}  }}",
+  "Deleting an opener must invalidate its generated closer marker: "
+    .. vim.inspect(lines(removed_opener)[1]))
 
 local changed_filetype = buffer("jinja", "")
 feed("i{{<Esc>")
 vim.bo[changed_filetype].filetype = "html"
 api.nvim_win_set_cursor(0, { 1, 2 })
 feed("i}<Esc>")
-assert(lines(changed_filetype)[1] == "{{}}}",
-  "A filetype change must restore native closer input")
+assert(lines(changed_filetype)[1] == "{{}  }}",
+  "A filetype change must restore native closer input: "
+    .. vim.inspect(lines(changed_filetype)[1]))
 
 typed("html", "", { 1, 0 }, "{{", { "{{" },
   "HTML buffer keeps native braces")
