@@ -12,7 +12,10 @@ documented as current behavior in [README.md](README.md).
    regression fixtures before advertising support.
 3. **Configuration and compatibility.** Explore opt-in mappings or per-filetype
    controls without changing the safe default behavior or stacking handlers.
-4. **Automated performance and compatibility checks.** Add repeatable
-   large-document benchmarks to CI and verify supported Neovim and parser
-   versions there. Editing performance has already been measured and improved
-   on 5,000-line HTML and TSX fixtures locally.
+4. **Broader performance and compatibility checks.** A GitHub Actions workflow
+   covers the existing standalone suites on the documented Neovim 0.12.5
+   baseline with pinned parser revisions. Add repeatable large-document timing
+   benchmarks and test additional Neovim and parser versions before claiming
+   broader compatibility.
+   Editing performance has already been measured and improved on 5,000-line
+   HTML and TSX fixtures locally.

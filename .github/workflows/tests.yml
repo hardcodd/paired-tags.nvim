@@ -1,0 +1,57 @@
+name: Standalone tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Neovim 0.12.5
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-linux-x86_64.tar.gz \
+            --output "$RUNNER_TEMP/nvim.tar.gz"
+          tar -xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Install Tree-sitter CLI 0.27.0
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.0/tree-sitter-cli-linux-x64.zip \
+            --output "$RUNNER_TEMP/tree-sitter-cli.zip"
+          unzip -q "$RUNNER_TEMP/tree-sitter-cli.zip" -d "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/tree-sitter"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Check out pinned parser and integration tools
+        run: |
+          git clone https://github.com/nvim-treesitter/nvim-treesitter.git "$RUNNER_TEMP/nvim-treesitter"
+          git -C "$RUNNER_TEMP/nvim-treesitter" checkout --detach 728e031f6b11d03d1f0708b7dc4fb0f1d9c8a137
+          git clone https://github.com/windwp/nvim-autopairs.git "$RUNNER_TEMP/nvim-autopairs"
+          git -C "$RUNNER_TEMP/nvim-autopairs" checkout --detach 23320e75953ac82e559c610bec5a90d9c6dfa743
+
+      - name: Install and verify parsers
+        env:
+          PAIRED_TAGS_TREESITTER_RTP: ${{ runner.temp }}/nvim-treesitter
+          PAIRED_TAGS_PARSER_RTP: ${{ runner.temp }}/paired-tags-parsers
+        run: |
+          nvim --version
+          tree-sitter --version
+          nvim --headless -u NONE -i NONE -n \
+            '+lua local ok, err = pcall(dofile, "tests/install_ci_parsers.lua"); if not ok then print(err); vim.cmd("cquit") end' \
+            +qa!
+
+      - name: Run standalone suites
+        env:
+          PAIRED_TAGS_PARSER_RTP: ${{ runner.temp }}/paired-tags-parsers
+          PAIRED_TAGS_TREESITTER_RTP: ${{ runner.temp }}/nvim-treesitter
+          PAIRED_TAGS_AUTOPAIRS_RTP: ${{ runner.temp }}/nvim-autopairs
+        run: bash tests/run.sh

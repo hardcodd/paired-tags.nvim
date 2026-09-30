@@ -1,6 +1,9 @@
 vim.opt.rtp:prepend(vim.fn.getcwd())
 vim.opt.rtp:append(vim.env.PAIRED_TAGS_PARSER_RTP
   or (vim.fn.stdpath("data") .. "/lazy/nvim-treesitter"))
+if vim.env.PAIRED_TAGS_TREESITTER_RTP then
+  vim.opt.rtp:append(vim.env.PAIRED_TAGS_TREESITTER_RTP)
+end
 vim.cmd("filetype plugin indent on")
 vim.treesitter.language.register("javascript", "javascriptreact")
 vim.treesitter.language.register("tsx", "typescriptreact")

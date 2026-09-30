@@ -210,3 +210,16 @@ plugin. PHP is out of scope for this release.
 - Acceptance requires checking the rendered README, verifying that its claims
   match the implementation, and confirming the published repository metadata
   and default-branch contents after publication.
+
+## Continuous integration baseline
+
+- Run the standalone suites on GitHub Actions for pushes and pull requests
+  using Neovim 0.12.5 and pinned parser definitions matching the documented
+  Django and Jinja grammar revisions.
+- Install every parser required by the supported filetypes in an isolated CI
+  runtime path. Run the `nvim-autopairs` integration suite in both load orders
+  using the documented tested revision.
+- Use one repository runner for local and CI test execution. A failed suite or
+  parser installation must fail the job, and a successful run must report each
+  suite. Keep this baseline separate from proposed version-matrix and
+  large-document benchmark work.

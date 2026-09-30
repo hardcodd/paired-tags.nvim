@@ -174,14 +174,32 @@ document, or add general punctuation pairing for quotes and brackets.
 ## Verification
 
 The repository includes standalone tests for setup, highlighting and its
-configuration, HTML Enter, paired editing, 56 language scenarios, and three
-bug-report suites (35, 62, and 188 cases), plus Django and Jinja
-template editing. Run from the repository
-root with an installed set of the parsers listed above. `tests/bootstrap.lua`
+configuration, HTML Enter, paired editing, 56 language scenarios, and four
+bug-report suites (51, 35, 62, and 188 cases), plus Django and Jinja
+template editing. Run from the repository root with an installed set of the
+parsers listed above. `tests/bootstrap.lua`
 uses the parsers in Neovim's standard data directory; set
 `PAIRED_TAGS_PARSER_RTP` to another complete parser and query runtime path if
-necessary. If Jinja parsers are installed separately, append their directory
-to `runtimepath` after `tests/bootstrap.lua`.
+necessary. If parsers are installed separately from `nvim-treesitter`, also set
+`PAIRED_TAGS_TREESITTER_RTP` to its checkout so filetype indentation is
+available. If Jinja parsers are in another directory, append it to
+`runtimepath` after `tests/bootstrap.lua`.
+
+To run every standalone suite, including the `nvim-autopairs` integration
+suite in both load orders, set its checkout path and run:
+
+```sh
+PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs bash tests/run.sh
+```
+
+The GitHub Actions workflow is configured to run the same script on pushes
+and pull requests. Its baseline uses Neovim 0.12.5, Tree-sitter CLI 0.27.0,
+`nvim-treesitter` at `728e031` with its pinned grammar revisions, and
+`nvim-autopairs` at `23320e7`. It installs parsers in an isolated runtime path.
+Compatibility across other Neovim and parser versions and automated timing
+benchmarks remain future work.
+
+To run one suite, use the commands below.
 
 ```sh
 nvim --headless -u NONE -i NONE -n \
@@ -202,7 +220,7 @@ Replace the test path with `template_html_spec.lua`,
 `template_blocks_spec.lua`, `template_branches_spec.lua`,
 `template_delimiters_spec.lua`, `html_enter_spec.lua`,
 `highlight_spec.lua`, `paired_editing_spec.lua`, `rename_fast_path_spec.lua`,
-`tag_scenarios_spec.lua`,
+`tag_scenarios_spec.lua`, `tag_bug_regressions_spec.lua`,
 `tag_bug_report_2_spec.lua`, or
 `tag_bug_report_3_spec.lua` to run the other suites. Synchronous tests need
 the `pcall`/`cquit` wrapper shown above; regression runners exit on their own.
