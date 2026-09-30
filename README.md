@@ -186,11 +186,17 @@ available. If Jinja parsers are in another directory, append it to
 `runtimepath` after `tests/bootstrap.lua`.
 
 To run every standalone suite, including the `nvim-autopairs` integration
-suite in both load orders, set its checkout path and run:
+suite in both load orders, set its checkout path and run. The tests load
+`paired-tags.nvim` from the current repository via `tests/bootstrap.lua`;
+`nvim-autopairs` is a separate plugin needed only for the integration suite.
+For a default `lazy.nvim` installation on Unix, use:
 
 ```sh
-PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs bash tests/run.sh
+PAIRED_TAGS_AUTOPAIRS_RTP="$HOME/.local/share/nvim/lazy/nvim-autopairs" bash tests/run.sh
 ```
+
+Use your `nvim-autopairs` checkout directory if your plugin manager or
+Neovim data directory differs.
 
 The GitHub Actions workflow is configured to run the same script on pushes
 and pull requests. Its baseline uses Neovim 0.12.5, Tree-sitter CLI 0.27.0,
@@ -226,18 +232,18 @@ Replace the test path with `template_html_spec.lua`,
 the `pcall`/`cquit` wrapper shown above; regression runners exit on their own.
 The highlight configuration suite runs without `tests/bootstrap.lua` so it
 can call `setup()` with custom options before defaults are registered.
-To run the delimiter integration suite in both load orders, replace the path
-below with an installed `nvim-autopairs` checkout:
+To run the delimiter integration suite in both load orders, set the same
+checkout path first:
 
 ```sh
-PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs \
-  nvim --headless -u NONE -i NONE -n \
+export PAIRED_TAGS_AUTOPAIRS_RTP="$HOME/.local/share/nvim/lazy/nvim-autopairs"
+
+nvim --headless -u NONE -i NONE -n \
   '+luafile tests/bootstrap.lua' \
   '+lua local ok, err = pcall(dofile, "tests/template_delimiter_autopairs_spec.lua"); if not ok then print(err); vim.cmd("cquit") end' \
   +qa!
 
-PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs \
-  nvim --headless -u NONE -i NONE -n \
+nvim --headless -u NONE -i NONE -n \
   '+lua vim.opt.rtp:append(vim.env.PAIRED_TAGS_AUTOPAIRS_RTP); require("nvim-autopairs").setup({ map_cr = false })' \
   '+luafile tests/bootstrap.lua' \
   '+lua local ok, err = pcall(dofile, "tests/template_delimiter_autopairs_spec.lua"); if not ok then print(err); vim.cmd("cquit") end' \
