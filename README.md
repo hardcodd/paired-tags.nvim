@@ -247,6 +247,16 @@ PAIRED_TAGS_AUTOPAIRS_RTP=/path/to/nvim-autopairs \
 The integration suite was run with `nvim-autopairs` 0.10.0 at `23320e7`.
 The contract and acceptance criteria are in [SPECS.md](SPECS.md).
 
+## Support
+
+If this plugin is useful to you, you can
+[support its development on CloudTips](https://pay.cloudtips.ru/p/f92ee349).
+You can also scan the QR code:
+
+<a href="https://pay.cloudtips.ru/p/f92ee349">
+  <img src="assets/cloudtips-qr.png" alt="CloudTips donation QR code" width="220">
+</a>
+
 ## License
 
 [MIT](LICENSE).
